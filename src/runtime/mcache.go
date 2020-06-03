@@ -86,14 +86,14 @@ func allocmcache() *mcache {
 	var c *mcache
 	systemstack(func() {
 		lock(&mheap_.lock)
-		c = (*mcache)(mheap_.cachealloc.alloc())
+		c = (*mcache)(mheap_.cachealloc.alloc())  // 申请一块内存
 		c.flushGen = mheap_.sweepgen
 		unlock(&mheap_.lock)
 	})
-	for i := range c.alloc {
+	for i := range c.alloc {  // 向mcache所有坑位填充空的mspan
 		c.alloc[i] = &emptymspan
 	}
-	c.next_sample = nextSample()
+	c.next_sample = nextSample()  // 赋值一个随机地址
 	return c
 }
 
@@ -135,7 +135,7 @@ func (c *mcache) refill(spc spanClass) {
 	}
 
 	// Get a new cached span from the central lists.
-	s = mheap_.central[spc].mcentral.cacheSpan()
+	s = mheap_.central[spc].mcentral.cacheSpan()  // 从mcentral中获取一个span，mcentral没有会向mheap要
 	if s == nil {
 		throw("out of memory")
 	}

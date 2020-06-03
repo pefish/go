@@ -133,7 +133,7 @@ const (
 	_TinySize      = 16
 	_TinySizeClass = int8(2)
 
-	_FixAllocChunk = 16 << 10 // Chunk size for FixAlloc
+	_FixAllocChunk = 16 << 10 // Chunk size for FixAlloc  16k
 
 	// Per-P, per order stack segment cache size.
 	_StackCacheSize = 32 * 1024
@@ -426,7 +426,7 @@ func mallocinit() {
 	}
 
 	// Copy class sizes out for statistics table.
-	for i := range class_to_size {
+	for i := range class_to_size {  // 循环所有内存块规格
 		memstats.by_size[i].size = uint32(class_to_size[i])
 	}
 
@@ -467,12 +467,12 @@ func mallocinit() {
 	}
 
 	// Initialize the heap.
-	mheap_.init()
+	mheap_.init()  // 初始化mheap、mcache分配器、mcentrals等等
 	_g_ := getg()
-	_g_.m.mcache = allocmcache()
+	_g_.m.mcache = allocmcache()  // 从mcache分配器中申请得到一个mcache，实际上mcache应该是由p申请的，m会在附加p的时候会将p的mcache给m（acquirep函数），这里因为p还没有初始化，就直接给了m
 
 	// Create initial arena growth hints.
-	if sys.PtrSize == 8 {
+	if sys.PtrSize == 8 {  // 如果是64位机器
 		// On a 64-bit machine, we pick the following hints
 		// because:
 		//
@@ -531,9 +531,9 @@ func mallocinit() {
 			default:
 				p = uintptr(i)<<40 | uintptrMask&(0x00c0<<32)
 			}
-			hint := (*arenaHint)(mheap_.arenaHintAlloc.alloc())
+			hint := (*arenaHint)(mheap_.arenaHintAlloc.alloc()) // 申请真实内存得到一个arenaHint(表示arena区域的生长点)
 			hint.addr = p
-			hint.next, mheap_.arenaHints = mheap_.arenaHints, hint
+			hint.next, mheap_.arenaHints = mheap_.arenaHints, hint  // 得到的arenaHint对象赋值给m
 		}
 	} else {
 		// On a 32-bit machine, we're much more concerned
@@ -859,13 +859,13 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 	s = c.alloc[spc]
 	shouldhelpgc = false
 	freeIndex := s.nextFreeIndex()
-	if freeIndex == s.nelems {
+	if freeIndex == s.nelems {  // 如果这个规格的span用完了
 		// The span is full.
 		if uintptr(s.allocCount) != s.nelems {
 			println("runtime: s.allocCount=", s.allocCount, "s.nelems=", s.nelems)
 			throw("s.allocCount != s.nelems && freeIndex == s.nelems")
 		}
-		c.refill(spc)
+		c.refill(spc)  // 从mcentral中获取一个span赋值给c.alloc[spc]，mcentral没有会向mheap要
 		shouldhelpgc = true
 		s = c.alloc[spc]
 
@@ -897,9 +897,9 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		return unsafe.Pointer(&zerobase)
 	}
 
-	if debug.sbrk != 0 {
+	if debug.sbrk != 0 {  // 如果sbrk开启的话，直接简单的从操作系统分配内存，并且不会回收
 		align := uintptr(16)
-		if typ != nil {
+		if typ != nil {  // 进行内存对齐
 			// TODO(austin): This should be just
 			//   align = uintptr(typ.align)
 			// but that's only 4 on 32-bit platforms,
@@ -942,22 +942,22 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	}
 
 	// Set mp.mallocing to keep from being preempted by GC.
-	mp := acquirem()
-	if mp.mallocing != 0 {
+	mp := acquirem()  // 独占m
+	if mp.mallocing != 0 { // 如果m正在分配内存，则造成死锁
 		throw("malloc deadlock")
 	}
 	if mp.gsignal == getg() {
 		throw("malloc during signal")
 	}
-	mp.mallocing = 1
+	mp.mallocing = 1  // 标记为正在分配内存
 
 	shouldhelpgc := false
 	dataSize := size
-	c := gomcache()
+	c := gomcache()  // 获取当前m的mcache
 	var x unsafe.Pointer
 	noscan := typ == nil || typ.ptrdata == 0
-	if size <= maxSmallSize {
-		if noscan && size < maxTinySize {
+	if size <= maxSmallSize {  // 如果要分配的内存<=32k
+		if noscan && size < maxTinySize { // 如果是值类型且小于16byte
 			// Tiny allocator.
 			//
 			// Tiny allocator combines several tiny allocation requests
@@ -987,68 +987,68 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			// standalone escaping variables. On a json benchmark
 			// the allocator reduces number of allocations by ~12% and
 			// reduces heap size by ~20%.
-			off := c.tinyoffset
+			off := c.tinyoffset  // 取出mcache中tiny区域上次用到的偏移量
 			// Align tiny pointer for required (conservative) alignment.
-			if size&7 == 0 {
-				off = alignUp(off, 8)
+			if size&7 == 0 {  // 内存对齐
+				off = alignUp(off, 8) // 往上四舍五入到8的倍数，让每个变量从2的n次方处开始分配
 			} else if size&3 == 0 {
 				off = alignUp(off, 4)
 			} else if size&1 == 0 {
 				off = alignUp(off, 2)
 			}
-			if off+size <= maxTinySize && c.tiny != 0 {
+			if off+size <= maxTinySize && c.tiny != 0 {  // 如果此次分配后的偏移<=16，则直接使用mcache的tiny内存块分配
 				// The object fits into existing tiny block.
-				x = unsafe.Pointer(c.tiny + off)
-				c.tinyoffset = off + size
-				c.local_tinyallocs++
-				mp.mallocing = 0
-				releasem(mp)
-				return x
+				x = unsafe.Pointer(c.tiny + off)  // 得到变量开始位置（区域应该是c.tiny + off ~ c.tiny + off + size）
+				c.tinyoffset = off + size  // 更新偏移量
+				c.local_tinyallocs++  // 记录分配的tiny对象的总个数
+				mp.mallocing = 0  // 标记为分配结束
+				releasem(mp)  // 放弃独占m
+				return x  // 返回变量开始位置
 			}
 			// Allocate a new maxTinySize block.
-			span := c.alloc[tinySpanClass]
-			v := nextFreeFast(span)
+			span := c.alloc[tinySpanClass] // 向mcache申请
+			v := nextFreeFast(span) // 快速得到一个tinySpanClass规格的span的可用区域的开始位置
 			if v == 0 {
 				v, _, shouldhelpgc = c.nextFree(tinySpanClass)
 			}
-			x = unsafe.Pointer(v)
+			x = unsafe.Pointer(v)  // x是这个函数的返回值，v设置为返回值，也就是v就是变量开始位置
 			(*[2]uint64)(x)[0] = 0
 			(*[2]uint64)(x)[1] = 0
 			// See if we need to replace the existing tiny block with the new one
 			// based on amount of remaining free space.
 			if size < c.tinyoffset || c.tiny == 0 {
-				c.tiny = uintptr(x)
-				c.tinyoffset = size
+				c.tiny = uintptr(x)  // 设置新的tiny块
+				c.tinyoffset = size  // 设置新的偏移量
 			}
 			size = maxTinySize
-		} else {
+		} else {  // 如果要分配的内存>16byte且<= 32k，或者是指针类型变量
 			var sizeclass uint8
-			if size <= smallSizeMax-8 {
+			if size <= smallSizeMax-8 {  // 如果目标大小<=1016byte，就是下面的规格
 				sizeclass = size_to_class8[(size+smallSizeDiv-1)/smallSizeDiv]
 			} else {
 				sizeclass = size_to_class128[(size-smallSizeMax+largeSizeDiv-1)/largeSizeDiv]
 			}
-			size = uintptr(class_to_size[sizeclass])
-			spc := makeSpanClass(sizeclass, noscan)
-			span := c.alloc[spc]
+			size = uintptr(class_to_size[sizeclass]) // 得到规格的大小
+			spc := makeSpanClass(sizeclass, noscan)  // 得到spanClass
+			span := c.alloc[spc]  // 取出这个规格的span
 			v := nextFreeFast(span)
 			if v == 0 {
-				v, span, shouldhelpgc = c.nextFree(spc)
+				v, span, shouldhelpgc = c.nextFree(spc)  // mcache没有的话会向mcentral要，mcentral没有会向mheap要
 			}
-			x = unsafe.Pointer(v)
+			x = unsafe.Pointer(v)  // 内存开始位置返回给变量使用
 			if needzero && span.needzero != 0 {
 				memclrNoHeapPointers(unsafe.Pointer(v), size)
 			}
 		}
-	} else {
+	} else {  // 如果目标大小>32k
 		var s *mspan
 		shouldhelpgc = true
 		systemstack(func() {
-			s = largeAlloc(size, needzero, noscan)
+			s = largeAlloc(size, needzero, noscan)  // 从mheap中分配内存
 		})
 		s.freeindex = 1
 		s.allocCount = 1
-		x = unsafe.Pointer(s.base())
+		x = unsafe.Pointer(s.base())  // 开始位置返回给变量使用
 		size = s.elemsize
 	}
 
@@ -1090,7 +1090,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	// This may be racing with GC so do it atomically if there can be
 	// a race marking the bit.
 	if gcphase != _GCoff {
-		gcmarknewobject(uintptr(x), size, scanSize)
+		gcmarknewobject(uintptr(x), size, scanSize)  // gc标记这个对象
 	}
 
 	if raceenabled {
@@ -1101,8 +1101,8 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		msanmalloc(x, size)
 	}
 
-	mp.mallocing = 0
-	releasem(mp)
+	mp.mallocing = 0  // 标记分配结束
+	releasem(mp)  // 放弃独占
 
 	if debug.allocfreetrace != 0 {
 		tracealloc(x, size, typ)
@@ -1149,7 +1149,7 @@ func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
 	// pays the debt down to npage pages.
 	deductSweepCredit(npages*_PageSize, npages)
 
-	s := mheap_.alloc(npages, makeSpanClass(0, noscan), needzero)
+	s := mheap_.alloc(npages, makeSpanClass(0, noscan), needzero)  // 从mheap中分配内存，得到一个mspan
 	if s == nil {
 		throw("out of memory")
 	}
@@ -1315,7 +1315,7 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 		align = 8
 	}
 
-	if size >= maxBlock {
+	if size >= maxBlock {  // 如果大于64k，直接向操作系统申请
 		return (*notInHeap)(sysAlloc(size, sysStat))
 	}
 
@@ -1328,7 +1328,7 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 		persistent = &globalAlloc.persistentAlloc
 	}
 	persistent.off = alignUp(persistent.off, align)
-	if persistent.off+size > persistentChunkSize || persistent.base == nil {
+	if persistent.off+size > persistentChunkSize || persistent.base == nil {  //
 		persistent.base = (*notInHeap)(sysAlloc(persistentChunkSize, &memstats.other_sys))
 		if persistent.base == nil {
 			if persistent == &globalAlloc.persistentAlloc {

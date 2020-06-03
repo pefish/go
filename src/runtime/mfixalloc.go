@@ -76,8 +76,8 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 		}
 		return v
 	}
-	if uintptr(f.nchunk) < f.size {
-		f.chunk = uintptr(persistentalloc(_FixAllocChunk, 0, f.stat))
+	if uintptr(f.nchunk) < f.size {  // 如果chunk剩余的空间大小<目标的大小
+		f.chunk = uintptr(persistentalloc(_FixAllocChunk, 0, f.stat))  // 申请16k内存，chunk指向开始位置
 		f.nchunk = _FixAllocChunk
 	}
 
@@ -85,10 +85,10 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 	if f.first != nil {
 		f.first(f.arg, v)
 	}
-	f.chunk = f.chunk + f.size
-	f.nchunk -= uint32(f.size)
-	f.inuse += f.size
-	return v
+	f.chunk = f.chunk + f.size  // 指针上升目标大小，剩余的空间大小减小这么多
+	f.nchunk -= uint32(f.size)  // 更新剩余的空间大小
+	f.inuse += f.size  // 更新已使用空间大小
+	return v  // 返回剩余空间的开始位置
 }
 
 func (f *fixalloc) free(p unsafe.Pointer) {

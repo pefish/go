@@ -79,7 +79,7 @@ retry:
 			unlock(&c.lock)
 			s.sweep(true)
 			freeIndex := s.nextFreeIndex()
-			if freeIndex != s.nelems {
+			if freeIndex != s.nelems {  // 如果有span了
 				s.freeindex = freeIndex
 				goto havespan
 			}
@@ -103,7 +103,7 @@ retry:
 	unlock(&c.lock)
 
 	// Replenish central list if empty.
-	s = c.grow()
+	s = c.grow()  // 从mheap申请span
 	if s == nil {
 		return nil
 	}
