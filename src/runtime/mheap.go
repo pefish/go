@@ -44,6 +44,15 @@ const (
 	// Must be a multiple of the pageInUse bitmap element size and
 	// must also evenly divid pagesPerArena.
 	pagesPerReclaimerChunk = 512
+
+	// go115NewMCentralImpl is a feature flag for the new mcentral implementation.
+	//
+	// This flag depends on go115NewMarkrootSpans because the new mcentral
+	// implementation requires that markroot spans no longer rely on mgcsweepbufs.
+	// The definition of this flag helps ensure that if there's a problem with
+	// the new markroot spans implementation and it gets turned off, that the new
+	// mcentral implementation also gets turned off so the runtime isn't broken.
+	go115NewMCentralImpl = true && go115NewMarkrootSpans
 )
 
 // Main malloc heap.
@@ -85,9 +94,11 @@ type mheap struct {
 	// unswept stack and pushes spans that are still in-use on the
 	// swept stack. Likewise, allocating an in-use span pushes it
 	// on the swept stack.
+	//
+	// For !go115NewMCentralImpl.
 	sweepSpans [2]gcSweepBuf
 
-	// _ uint32 // align uint64 fields on 32-bit for atomics
+	_ uint32 // align uint64 fields on 32-bit for atomics
 
 	// Proportional sweep
 	//
@@ -565,13 +576,13 @@ func (sc spanClass) noscan() bool {
 //
 //go:nosplit
 func arenaIndex(p uintptr) arenaIdx {
-	return arenaIdx((p + arenaBaseOffset) / heapArenaBytes)
+	return arenaIdx((p - arenaBaseOffset) / heapArenaBytes)
 }
 
 // arenaBase returns the low address of the region covered by heap
 // arena i.
 func arenaBase(i arenaIdx) uintptr {
-	return uintptr(i)*heapArenaBytes - arenaBaseOffset
+	return uintptr(i)*heapArenaBytes + arenaBaseOffset
 }
 
 type arenaIdx uint
@@ -1272,19 +1283,22 @@ HaveSpan:
 	// Publish the span in various locations.
 
 	// This is safe to call without the lock held because the slots
-	// related to this span will only every be read or modified by
-	// this thread until pointers into the span are published or
-	// pageInUse is updated.
+	// related to this span will only ever be read or modified by
+	// this thread until pointers into the span are published (and
+	// we execute a publication barrier at the end of this function
+	// before that happens) or pageInUse is updated.
 	h.setSpans(s.base(), npages, s)
 
 	if !manual {
-		// Add to swept in-use list.
-		//
-		// This publishes the span to root marking.
-		//
-		// h.sweepgen is guaranteed to only change during STW,
-		// and preemption is disabled in the page allocator.
-		h.sweepSpans[h.sweepgen/2%2].push(s)
+		if !go115NewMCentralImpl {
+			// Add to swept in-use list.
+			//
+			// This publishes the span to root marking.
+			//
+			// h.sweepgen is guaranteed to only change during STW,
+			// and preemption is disabled in the page allocator.
+			h.sweepSpans[h.sweepgen/2%2].push(s)
+		}
 
 		// Mark in-use span in arena page bitmap.
 		//
@@ -1302,6 +1316,11 @@ HaveSpan:
 			traceHeapAlloc()
 		}
 	}
+
+	// Make sure the newly allocated span will be observed
+	// by the GC before pointers into the span are published.
+	publicationBarrier()
+
 	return s
 }
 
@@ -1314,8 +1333,11 @@ func (h *mheap) grow(npage uintptr) bool {
 	ask := alignUp(npage, pallocChunkPages) * pageSize
 
 	totalGrowth := uintptr(0)
-	nBase := alignUp(h.curArena.base+ask, physPageSize)
-	if nBase > h.curArena.end {
+	// This may overflow because ask could be very large
+	// and is otherwise unrelated to h.curArena.base.
+	end := h.curArena.base + ask
+	nBase := alignUp(end, physPageSize)
+	if nBase > h.curArena.end || /* overflow */ end < h.curArena.base {
 		// Not enough room in the current arena. Allocate more
 		// arena space. This may not be contiguous with the
 		// current arena, so we have to request the full ask.
@@ -1351,7 +1373,10 @@ func (h *mheap) grow(npage uintptr) bool {
 		mSysStatInc(&memstats.heap_released, asize)
 		mSysStatInc(&memstats.heap_idle, asize)
 
-		// Recalculate nBase
+		// Recalculate nBase.
+		// We know this won't overflow, because sysAlloc returned
+		// a valid region starting at h.curArena.base which is at
+		// least ask bytes in size.
 		nBase = alignUp(h.curArena.base+ask, physPageSize)
 	}
 
@@ -1370,7 +1395,7 @@ func (h *mheap) grow(npage uintptr) bool {
 		if overage := uintptr(retained + uint64(totalGrowth) - h.scavengeGoal); todo > overage {
 			todo = overage
 		}
-		h.pages.scavenge(todo, true)
+		h.pages.scavenge(todo, false)
 	}
 	return true
 }
@@ -1454,9 +1479,9 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
 	h.freeMSpanLocked(s)
 }
 
-// scavengeAll visits each node in the free treap and scavenges the
-// treapNode's span. It then removes the scavenged span from
-// unscav and adds it into scav before continuing.
+// scavengeAll acquires the heap lock (blocking any additional
+// manipulation of the page allocator) and iterates over the whole
+// heap, scavenging every free page available.
 func (h *mheap) scavengeAll() {
 	// Disallow malloc or panic while holding the heap lock. We do
 	// this here because this is a non-mallocgc entry-point to
@@ -1464,14 +1489,16 @@ func (h *mheap) scavengeAll() {
 	gp := getg()
 	gp.m.mallocing++
 	lock(&h.lock)
-	// Reset the scavenger address so we have access to the whole heap.
-	h.pages.resetScavengeAddr()
-	released := h.pages.scavenge(^uintptr(0), true)
+	// Start a new scavenge generation so we have a chance to walk
+	// over the whole heap.
+	h.pages.scavengeStartGen()
+	released := h.pages.scavenge(^uintptr(0), false)
+	gen := h.pages.scav.gen
 	unlock(&h.lock)
 	gp.m.mallocing--
 
 	if debug.scavtrace > 0 {
-		printScavTrace(released, true)
+		printScavTrace(gen, released, true)
 	}
 }
 

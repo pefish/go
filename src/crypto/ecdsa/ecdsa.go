@@ -62,6 +62,9 @@ type PublicKey struct {
 	X, Y *big.Int
 }
 
+// Any methods implemented on PublicKey might need to also be implemented on
+// PrivateKey, as the latter embeds the former and will expose its methods.
+
 // Equal reports whether pub and x have the same value.
 //
 // Two keys are only considered to have the same value if they have the same Curve value.
@@ -89,6 +92,17 @@ type PrivateKey struct {
 // Public returns the public key corresponding to priv.
 func (priv *PrivateKey) Public() crypto.PublicKey {
 	return &priv.PublicKey
+}
+
+// Equal reports whether priv and x have the same value.
+//
+// See PublicKey.Equal for details on how Curve is compared.
+func (priv *PrivateKey) Equal(x crypto.PrivateKey) bool {
+	xx, ok := x.(*PrivateKey)
+	if !ok {
+		return false
+	}
+	return priv.PublicKey.Equal(&xx.PublicKey) && priv.D.Cmp(xx.D) == 0
 }
 
 // Sign signs digest with priv, reading randomness from rand. The opts argument
@@ -220,6 +234,10 @@ func Sign(rand io.Reader, priv *PrivateKey, hash []byte) (r, s *big.Int, err err
 
 	// See [NSA] 3.4.1
 	c := priv.PublicKey.Curve
+	return sign(priv, &csprng, c, hash)
+}
+
+func signGeneric(priv *PrivateKey, csprng *cipher.StreamReader, c elliptic.Curve, hash []byte) (r, s *big.Int, err error) {
 	N := c.Params().N
 	if N.Sign() == 0 {
 		return nil, nil, errZeroParam
@@ -227,7 +245,7 @@ func Sign(rand io.Reader, priv *PrivateKey, hash []byte) (r, s *big.Int, err err
 	var k, kInv *big.Int
 	for {
 		for {
-			k, err = randFieldElement(c, csprng)
+			k, err = randFieldElement(c, *csprng)
 			if err != nil {
 				r = nil
 				return
@@ -281,9 +299,13 @@ func Verify(pub *PublicKey, hash []byte, r, s *big.Int) bool {
 	if r.Cmp(N) >= 0 || s.Cmp(N) >= 0 {
 		return false
 	}
-	e := hashToInt(hash, c)
+	return verify(pub, c, hash, r, s)
+}
 
+func verifyGeneric(pub *PublicKey, c elliptic.Curve, hash []byte, r, s *big.Int) bool {
+	e := hashToInt(hash, c)
 	var w *big.Int
+	N := c.Params().N
 	if in, ok := c.(invertible); ok {
 		w = in.Inverse(s)
 	} else {

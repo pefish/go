@@ -1390,6 +1390,63 @@ opswitch:
 			n = m
 		}
 
+	case OMAKESLICECOPY:
+		if n.Esc == EscNone {
+			Fatalf("OMAKESLICECOPY with EscNone: %v", n)
+		}
+
+		t := n.Type
+		if t.Elem().NotInHeap() {
+			Fatalf("%v is go:notinheap; heap allocation disallowed", t.Elem())
+		}
+
+		length := conv(n.Left, types.Types[TINT])
+		copylen := nod(OLEN, n.Right, nil)
+		copyptr := nod(OSPTR, n.Right, nil)
+
+		if !types.Haspointers(t.Elem()) && n.Bounded() {
+			// When len(to)==len(from) and elements have no pointers:
+			// replace make+copy with runtime.mallocgc+runtime.memmove.
+
+			// We do not check for overflow of len(to)*elem.Width here
+			// since len(from) is an existing checked slice capacity
+			// with same elem.Width for the from slice.
+			size := nod(OMUL, conv(length, types.Types[TUINTPTR]), conv(nodintconst(t.Elem().Width), types.Types[TUINTPTR]))
+
+			// instantiate mallocgc(size uintptr, typ *byte, needszero bool) unsafe.Pointer
+			fn := syslook("mallocgc")
+			sh := nod(OSLICEHEADER, nil, nil)
+			sh.Left = mkcall1(fn, types.Types[TUNSAFEPTR], init, size, nodnil(), nodbool(false))
+			sh.Left.MarkNonNil()
+			sh.List.Set2(length, length)
+			sh.Type = t
+
+			s := temp(t)
+			r := typecheck(nod(OAS, s, sh), ctxStmt)
+			r = walkexpr(r, init)
+			init.Append(r)
+
+			// instantiate memmove(to *any, frm *any, size uintptr)
+			fn = syslook("memmove")
+			fn = substArgTypes(fn, t.Elem(), t.Elem())
+			ncopy := mkcall1(fn, nil, init, nod(OSPTR, s, nil), copyptr, size)
+			ncopy = typecheck(ncopy, ctxStmt)
+			ncopy = walkexpr(ncopy, init)
+			init.Append(ncopy)
+
+			n = s
+		} else { // Replace make+copy with runtime.makeslicecopy.
+			// instantiate makeslicecopy(typ *byte, tolen int, fromlen int, from unsafe.Pointer) unsafe.Pointer
+			fn := syslook("makeslicecopy")
+			s := nod(OSLICEHEADER, nil, nil)
+			s.Left = mkcall1(fn, types.Types[TUNSAFEPTR], init, typename(t.Elem()), length, copylen, conv(copyptr, types.Types[TUNSAFEPTR]))
+			s.Left.MarkNonNil()
+			s.List.Set2(length, length)
+			s.Type = t
+			n = typecheck(s, ctxExpr)
+			n = walkexpr(n, init)
+		}
+
 	case ORUNESTR:
 		a := nodnil()
 		if n.Esc == EscNone {
@@ -3379,36 +3436,15 @@ func tracecmpArg(n *Node, t *types.Type, init *Nodes) *Node {
 }
 
 func walkcompareInterface(n *Node, init *Nodes) *Node {
-	// ifaceeq(i1 any-1, i2 any-2) (ret bool);
-	if !types.Identical(n.Left.Type, n.Right.Type) {
-		Fatalf("ifaceeq %v %v %v", n.Op, n.Left.Type, n.Right.Type)
-	}
-	var fn *Node
-	if n.Left.Type.IsEmptyInterface() {
-		fn = syslook("efaceeq")
-	} else {
-		fn = syslook("ifaceeq")
-	}
-
 	n.Right = cheapexpr(n.Right, init)
 	n.Left = cheapexpr(n.Left, init)
-	lt := nod(OITAB, n.Left, nil)
-	rt := nod(OITAB, n.Right, nil)
-	ld := nod(OIDATA, n.Left, nil)
-	rd := nod(OIDATA, n.Right, nil)
-	ld.Type = types.Types[TUNSAFEPTR]
-	rd.Type = types.Types[TUNSAFEPTR]
-	ld.SetTypecheck(1)
-	rd.SetTypecheck(1)
-	call := mkcall1(fn, n.Type, init, lt, ld, rd)
-
-	// Check itable/type before full compare.
-	// Note: short-circuited because order matters.
+	eqtab, eqdata := eqinterface(n.Left, n.Right)
 	var cmp *Node
 	if n.Op == OEQ {
-		cmp = nod(OANDAND, nod(OEQ, lt, rt), call)
+		cmp = nod(OANDAND, eqtab, eqdata)
 	} else {
-		cmp = nod(OOROR, nod(ONE, lt, rt), nod(ONOT, call, nil))
+		eqtab.Op = ONE
+		cmp = nod(OOROR, eqtab, nod(ONOT, eqdata, nil))
 	}
 	return finishcompare(n, cmp, init)
 }
@@ -3518,27 +3554,16 @@ func walkcompareString(n *Node, init *Nodes) *Node {
 		// prepare for rewrite below
 		n.Left = cheapexpr(n.Left, init)
 		n.Right = cheapexpr(n.Right, init)
-
-		lstr := conv(n.Left, types.Types[TSTRING])
-		rstr := conv(n.Right, types.Types[TSTRING])
-		lptr := nod(OSPTR, lstr, nil)
-		rptr := nod(OSPTR, rstr, nil)
-		llen := conv(nod(OLEN, lstr, nil), types.Types[TUINTPTR])
-		rlen := conv(nod(OLEN, rstr, nil), types.Types[TUINTPTR])
-
-		fn := syslook("memequal")
-		fn = substArgTypes(fn, types.Types[TUINT8], types.Types[TUINT8])
-		r = mkcall1(fn, types.Types[TBOOL], init, lptr, rptr, llen)
-
+		eqlen, eqmem := eqstring(n.Left, n.Right)
 		// quick check of len before full compare for == or !=.
 		// memequal then tests equality up to length len.
 		if n.Op == OEQ {
 			// len(left) == len(right) && memequal(left, right, len)
-			r = nod(OANDAND, nod(OEQ, llen, rlen), r)
+			r = nod(OANDAND, eqlen, eqmem)
 		} else {
 			// len(left) != len(right) || !memequal(left, right, len)
-			r = nod(ONOT, r, nil)
-			r = nod(OOROR, nod(ONE, llen, rlen), r)
+			eqlen.Op = ONE
+			r = nod(OOROR, eqlen, nod(ONOT, eqmem, nil))
 		}
 	} else {
 		// sys_cmpstring(s1, s2) :: 0
@@ -3803,6 +3828,9 @@ func candiscard(n *Node) bool {
 
 		// Difficult to tell what sizes are okay.
 	case OMAKESLICE:
+		return false
+
+	case OMAKESLICECOPY:
 		return false
 	}
 

@@ -794,7 +794,16 @@ func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
 	var lastc *hchan
 	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
 		if sg.c != lastc {
-			lock(&sg.c.lock)
+			// There is a ranking cycle here between gscan bit and
+			// hchan locks. Normally, we only allow acquiring hchan
+			// locks and then getting a gscan bit. In this case, we
+			// already have the gscan bit. We allow acquiring hchan
+			// locks here as a special case, since a deadlock can't
+			// happen because the G involved must already be
+			// suspended. So, we get a special hchan lock rank here
+			// that is lower than gscan, but doesn't allow acquiring
+			// any other locks other than hchan.
+			lockWithRank(&sg.c.lock, lockRankHchanLeaf)
 		}
 		lastc = sg.c
 	}
@@ -1033,6 +1042,17 @@ func newstack() {
 	// Allocate a bigger segment and move the stack.
 	oldsize := gp.stack.hi - gp.stack.lo
 	newsize := oldsize * 2
+
+	// Make sure we grow at least as much as needed to fit the new frame.
+	// (This is just an optimization - the caller of morestack will
+	// recheck the bounds on return.)
+	if f := findfunc(gp.sched.pc); f.valid() {
+		max := uintptr(funcMaxSPDelta(f))
+		for newsize-oldsize < max+_StackGuard {
+			newsize *= 2
+		}
+	}
+
 	if newsize > maxstacksize {
 		print("runtime: goroutine stack exceeds ", maxstacksize, "-byte limit\n")
 		print("runtime: sp=", hex(sp), " stack=[", hex(gp.stack.lo), ", ", hex(gp.stack.hi), "]\n")
@@ -1216,29 +1236,8 @@ func getStackMap(frame *stkframe, cache *pcvalueCache, debug bool) (locals, args
 		minsize = sys.MinFrameSize
 	}
 	if size > minsize {
-		var stkmap *stackmap
 		stackid := pcdata
-		if f.funcID != funcID_debugCallV1 {
-			stkmap = (*stackmap)(funcdata(f, _FUNCDATA_LocalsPointerMaps))
-		} else {
-			// debugCallV1's stack map is the register map
-			// at its call site.
-			callerPC := frame.lr
-			caller := findfunc(callerPC)
-			if !caller.valid() {
-				println("runtime: debugCallV1 called by unknown caller", hex(callerPC))
-				throw("bad debugCallV1")
-			}
-			stackid = int32(-1)
-			if callerPC != caller.entry {
-				callerPC--
-				stackid = pcdatavalue(caller, _PCDATA_RegMapIndex, callerPC, cache)
-			}
-			if stackid == -1 {
-				stackid = 0 // in prologue
-			}
-			stkmap = (*stackmap)(funcdata(caller, _FUNCDATA_RegPointerMaps))
-		}
+		stkmap := (*stackmap)(funcdata(f, _FUNCDATA_LocalsPointerMaps))
 		if stkmap == nil || stkmap.n <= 0 {
 			print("runtime: frame ", funcname(f), " untyped locals ", hex(frame.varp-size), "+", hex(size), "\n")
 			throw("missing stackmap")

@@ -98,8 +98,9 @@ func WriteObjFile(ctxt *Link, bout *bio.Writer, pkgpath string) {
 	w.wr.WriteByte(1)
 
 	// Autolib
-	for _, pkg := range ctxt.Imports {
-		w.writeString(pkg)
+	for _, p := range ctxt.Imports {
+		w.writeString(p.Pkg)
+		// This object format ignores p.Fingerprint.
 	}
 	w.writeString("")
 
@@ -786,6 +787,14 @@ func (ft *DwarfFixupTable) SetPrecursorFunc(s *LSym, fn interface{}) {
 	absfn.Set(AttrDuplicateOK, true)
 	absfn.Type = objabi.SDWARFINFO
 	ft.ctxt.Data = append(ft.ctxt.Data, absfn)
+
+	// In the case of "late" inlining (inlines that happen during
+	// wrapper generation as opposed to the main inlining phase) it's
+	// possible that we didn't cache the abstract function sym for the
+	// text symbol -- do so now if needed. See issue 38068.
+	if s.Func != nil && s.Func.dwarfAbsFnSym == nil {
+		s.Func.dwarfAbsFnSym = absfn
+	}
 
 	ft.precursor[s] = fnState{precursor: fn, absfn: absfn}
 }

@@ -33,6 +33,7 @@ package ld
 import (
 	"bytes"
 	"cmd/internal/bio"
+	"cmd/internal/goobj2"
 	"cmd/internal/obj"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
@@ -232,18 +233,20 @@ type Arch struct {
 	Dragonflydynld string
 	Solarisdynld   string
 	Adddynrel      func(*Target, *loader.Loader, *ArchSyms, *sym.Symbol, *sym.Reloc) bool
+	Adddynrel2     func(*Target, *loader.Loader, *ArchSyms, loader.Sym, loader.Reloc2, int) bool
 	Archinit       func(*Link)
-	// Archreloc is an arch-specific hook that assists in
-	// relocation processing (invoked by 'relocsym'); it handles
-	// target-specific relocation tasks. Here "rel" is the current
-	// relocation being examined, "sym" is the symbol containing the
-	// chunk of data to which the relocation applies, and "off" is the
-	// contents of the to-be-relocated data item (from sym.P). Return
-	// value is the appropriately relocated value (to be written back
-	// to the same spot in sym.P) and a boolean indicating
-	// success/failure (a failing value indicates a fatal error).
+	// Archreloc is an arch-specific hook that assists in relocation processing
+	// (invoked by 'relocsym'); it handles target-specific relocation tasks.
+	// Here "rel" is the current relocation being examined, "sym" is the symbol
+	// containing the chunk of data to which the relocation applies, and "off"
+	// is the contents of the to-be-relocated data item (from sym.P). Return
+	// value is the appropriately relocated value (to be written back to the
+	// same spot in sym.P), a boolean indicating if the external relocations'
+	// been used, and a boolean indicating success/failure (a failing value
+	// indicates a fatal error).
 	Archreloc func(target *Target, syms *ArchSyms, rel *sym.Reloc, sym *sym.Symbol,
 		offset int64) (relocatedOffset int64, success bool)
+	Archreloc2 func(*Target, *loader.Loader, *ArchSyms, loader.Reloc2, *loader.ExtReloc, loader.Sym, int64) (int64, bool, bool)
 	// Archrelocvariant is a second arch-specific hook used for
 	// relocation processing; it handles relocations where r.Type is
 	// insufficient to describe the relocation (r.Variant !=
@@ -263,10 +266,11 @@ type Arch struct {
 	// file. Typically, Asmb writes most of the content (sections and
 	// segments), for which we have computed the size and offset. Asmb2
 	// writes the rest.
-	Asmb  func(*Link)
+	Asmb  func(*Link, *loader.Loader)
 	Asmb2 func(*Link)
 
 	Elfreloc1   func(*Link, *sym.Reloc, int64) bool
+	Elfreloc2   func(*Link, *loader.Loader, loader.Sym, loader.ExtRelocView, int64) bool
 	Elfsetupplt func(ctxt *Link, plt, gotplt *loader.SymbolBuilder, dynamic loader.Sym)
 	Gentext     func(*Link)
 	Gentext2    func(*Link, *loader.Loader)
@@ -280,7 +284,7 @@ type Arch struct {
 	// This is possible when a TLS IE relocation refers to a local
 	// symbol in an executable, which is typical when internally
 	// linking PIE binaries.
-	TLSIEtoLE func(s *sym.Symbol, off, size int)
+	TLSIEtoLE func(P []byte, off, size int)
 
 	// optional override for assignAddress
 	AssignAddress func(ldr *loader.Loader, sect *sym.Section, n int, s loader.Sym, va uint64, isTramp bool) (*sym.Section, int, uint64)
@@ -424,14 +428,15 @@ func errorexit() {
 }
 
 func loadinternal(ctxt *Link, name string) *sym.Library {
+	zerofp := goobj2.FingerprintType{}
 	if ctxt.linkShared && ctxt.PackageShlib != nil {
 		if shlib := ctxt.PackageShlib[name]; shlib != "" {
-			return addlibpath(ctxt, "internal", "internal", "", name, shlib)
+			return addlibpath(ctxt, "internal", "internal", "", name, shlib, zerofp)
 		}
 	}
 	if ctxt.PackageFile != nil {
 		if pname := ctxt.PackageFile[name]; pname != "" {
-			return addlibpath(ctxt, "internal", "internal", pname, name, "")
+			return addlibpath(ctxt, "internal", "internal", pname, name, "", zerofp)
 		}
 		ctxt.Logf("loadinternal: cannot find %s\n", name)
 		return nil
@@ -444,7 +449,7 @@ func loadinternal(ctxt *Link, name string) *sym.Library {
 				ctxt.Logf("searching for %s.a in %s\n", name, shlibname)
 			}
 			if _, err := os.Stat(shlibname); err == nil {
-				return addlibpath(ctxt, "internal", "internal", "", name, shlibname)
+				return addlibpath(ctxt, "internal", "internal", "", name, shlibname, zerofp)
 			}
 		}
 		pname := filepath.Join(libdir, name+".a")
@@ -452,7 +457,7 @@ func loadinternal(ctxt *Link, name string) *sym.Library {
 			ctxt.Logf("searching for %s.a in %s\n", name, pname)
 		}
 		if _, err := os.Stat(pname); err == nil {
-			return addlibpath(ctxt, "internal", "internal", pname, name, "")
+			return addlibpath(ctxt, "internal", "internal", pname, name, "", zerofp)
 		}
 	}
 
@@ -503,7 +508,7 @@ func (ctxt *Link) loadlib() {
 	default:
 		log.Fatalf("invalid -strictdups flag value %d", *FlagStrictDups)
 	}
-	ctxt.loader = loader.NewLoader(flags, elfsetstring)
+	ctxt.loader = loader.NewLoader(flags, elfsetstring, &ctxt.ErrorReporter.ErrorReporter)
 	ctxt.ErrorReporter.SymName = func(s loader.Sym) string {
 		return ctxt.loader.SymName(s)
 	}
@@ -561,7 +566,7 @@ func (ctxt *Link) loadlib() {
 	}
 
 	// Add non-package symbols and references of externally defined symbols.
-	ctxt.loader.LoadNonpkgSyms(ctxt.Syms)
+	ctxt.loader.LoadNonpkgSyms(ctxt.Arch)
 
 	// Load symbols from shared libraries, after all Go object symbols are loaded.
 	for _, lib := range ctxt.Library {
@@ -1461,6 +1466,7 @@ func (ctxt *Link) hostlink() {
 		}
 	}
 
+	var altLinker string
 	if ctxt.IsELF && ctxt.DynlinkingGo() {
 		// We force all symbol resolution to be done at program startup
 		// because lazy PLT resolution can use large amounts of stack at
@@ -1472,6 +1478,11 @@ func (ctxt *Link) hostlink() {
 		// from the beginning of the section (like sym.STYPE).
 		argv = append(argv, "-Wl,-znocopyreloc")
 
+		if objabi.GOOS == "android" {
+			// Use lld to avoid errors from default linker (issue #38838)
+			altLinker = "lld"
+		}
+
 		if ctxt.Arch.InFamily(sys.ARM, sys.ARM64) && objabi.GOOS == "linux" {
 			// On ARM, the GNU linker will generate COPY relocations
 			// even with -znocopyreloc set.
@@ -1481,7 +1492,7 @@ func (ctxt *Link) hostlink() {
 			// generating COPY relocations.
 			//
 			// In both cases, switch to gold.
-			argv = append(argv, "-fuse-ld=gold")
+			altLinker = "gold"
 
 			// If gold is not installed, gcc will silently switch
 			// back to ld.bfd. So we parse the version information
@@ -1494,10 +1505,9 @@ func (ctxt *Link) hostlink() {
 			}
 		}
 	}
-
 	if ctxt.Arch.Family == sys.ARM64 && objabi.GOOS == "freebsd" {
 		// Switch to ld.bfd on freebsd/arm64.
-		argv = append(argv, "-fuse-ld=bfd")
+		altLinker = "bfd"
 
 		// Provide a useful error if ld.bfd is missing.
 		cmd := exec.Command(*flagExtld, "-fuse-ld=bfd", "-Wl,--version")
@@ -1506,6 +1516,9 @@ func (ctxt *Link) hostlink() {
 				log.Fatalf("ARM64 external linker must be ld.bfd (issue #35197), please install devel/binutils")
 			}
 		}
+	}
+	if altLinker != "" {
+		argv = append(argv, "-fuse-ld="+altLinker)
 	}
 
 	if ctxt.IsELF && len(buildinfo) > 0 {
@@ -1543,7 +1556,7 @@ func (ctxt *Link) hostlink() {
 	}
 
 	const compressDWARF = "-Wl,--compress-debug-sections=zlib-gnu"
-	if ctxt.compressDWARF && linkerFlagSupported(argv[0], compressDWARF) {
+	if ctxt.compressDWARF && linkerFlagSupported(argv[0], altLinker, compressDWARF) {
 		argv = append(argv, compressDWARF)
 	}
 
@@ -1633,7 +1646,7 @@ func (ctxt *Link) hostlink() {
 	if ctxt.BuildMode == BuildModeExe && !ctxt.linkShared {
 		// GCC uses -no-pie, clang uses -nopie.
 		for _, nopie := range []string{"-no-pie", "-nopie"} {
-			if linkerFlagSupported(argv[0], nopie) {
+			if linkerFlagSupported(argv[0], altLinker, nopie) {
 				argv = append(argv, nopie)
 				break
 			}
@@ -1734,7 +1747,7 @@ func (ctxt *Link) hostlink() {
 
 var createTrivialCOnce sync.Once
 
-func linkerFlagSupported(linker, flag string) bool {
+func linkerFlagSupported(linker, altLinker, flag string) bool {
 	createTrivialCOnce.Do(func() {
 		src := filepath.Join(*flagTmpdir, "trivial.c")
 		if err := ioutil.WriteFile(src, []byte("int main() { return 0; }"), 0666); err != nil {
@@ -1794,6 +1807,9 @@ func linkerFlagSupported(linker, flag string) bool {
 		}
 	}
 
+	if altLinker != "" {
+		flags = append(flags, "-fuse-ld="+altLinker)
+	}
 	flags = append(flags, flag, "trivial.c")
 
 	cmd := exec.Command(linker, flags...)
@@ -1984,9 +2000,27 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 	ldpkg(ctxt, f, lib, import1-import0-2, pn) // -2 for !\n
 	f.MustSeek(import1, 0)
 
-	ctxt.loader.Preload(ctxt.Syms, f, lib, unit, eof-f.Offset(), 0)
+	fingerprint := ctxt.loader.Preload(ctxt.Syms, f, lib, unit, eof-f.Offset())
+	if !fingerprint.IsZero() { // Assembly objects don't have fingerprints. Ignore them.
+		// Check fingerprint, to ensure the importing and imported packages
+		// have consistent view of symbol indices.
+		// Normally the go command should ensure this. But in case something
+		// goes wrong, it could lead to obscure bugs like run-time crash.
+		// Check it here to be sure.
+		if lib.Fingerprint.IsZero() { // Not yet imported. Update its fingerprint.
+			lib.Fingerprint = fingerprint
+		}
+		checkFingerprint(lib, fingerprint, lib.Srcref, lib.Fingerprint)
+	}
+
 	addImports(ctxt, lib, pn)
 	return nil
+}
+
+func checkFingerprint(lib *sym.Library, libfp goobj2.FingerprintType, src string, srcfp goobj2.FingerprintType) {
+	if libfp != srcfp {
+		Exitf("fingerprint mismatch: %s has %x, import from %s expecting %x", lib, libfp, src, srcfp)
+	}
 }
 
 func readelfsymboldata(ctxt *Link, f *elf.File, sym *elf.Symbol) []byte {
@@ -2218,8 +2252,8 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 	ctxt.Shlibs = append(ctxt.Shlibs, Shlib{Path: libpath, Hash: hash, Deps: deps, File: f})
 }
 
-func addsection(arch *sys.Arch, seg *sym.Segment, name string, rwx int) *sym.Section {
-	sect := new(sym.Section)
+func addsection(ldr *loader.Loader, arch *sys.Arch, seg *sym.Segment, name string, rwx int) *sym.Section {
+	sect := ldr.NewSection()
 	sect.Rwx = uint8(rwx)
 	sect.Name = name
 	sect.Seg = seg
@@ -2472,7 +2506,7 @@ const (
 	DeletedAutoSym = 'x'
 )
 
-func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int64, *sym.Symbol)) {
+func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int64)) {
 	// These symbols won't show up in the first loop below because we
 	// skip sym.STEXT symbols. Normal sym.STEXT symbols are emitted by walking textp.
 	s := ctxt.Syms.Lookup("runtime.text", 0)
@@ -2482,7 +2516,7 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 		// on AIX with external linker.
 		// See data.go:/textaddress
 		if !(ctxt.DynlinkingGo() && ctxt.HeadType == objabi.Hdarwin) && !(ctxt.HeadType == objabi.Haix && ctxt.LinkMode == LinkExternal) {
-			put(ctxt, s, s.Name, TextSym, s.Value, nil)
+			put(ctxt, s, s.Name, TextSym, s.Value)
 		}
 	}
 
@@ -2503,7 +2537,7 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 			break
 		}
 		if s.Type == sym.STEXT {
-			put(ctxt, s, s.Name, TextSym, s.Value, nil)
+			put(ctxt, s, s.Name, TextSym, s.Value)
 		}
 		n++
 	}
@@ -2515,7 +2549,7 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 		// on AIX with external linker.
 		// See data.go:/textaddress
 		if !(ctxt.DynlinkingGo() && ctxt.HeadType == objabi.Hdarwin) && !(ctxt.HeadType == objabi.Haix && ctxt.LinkMode == LinkExternal) {
-			put(ctxt, s, s.Name, TextSym, s.Value, nil)
+			put(ctxt, s, s.Name, TextSym, s.Value)
 		}
 	}
 
@@ -2534,7 +2568,10 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 		return true
 	}
 
-	for _, s := range ctxt.Syms.Allsym {
+	for _, s := range ctxt.loader.Syms {
+		if s == nil {
+			continue
+		}
 		if !shouldBeInSymbolTable(s) {
 			continue
 		}
@@ -2565,7 +2602,7 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 			if !s.Attr.Reachable() {
 				continue
 			}
-			put(ctxt, s, s.Name, DataSym, Symaddr(s), s.Gotype)
+			put(ctxt, s, s.Name, DataSym, Symaddr(s))
 
 		case sym.SBSS, sym.SNOPTRBSS, sym.SLIBFUZZER_EXTRA_COUNTER:
 			if !s.Attr.Reachable() {
@@ -2574,11 +2611,11 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 			if len(s.P) > 0 {
 				Errorf(s, "should not be bss (size=%d type=%v special=%v)", len(s.P), s.Type, s.Attr.Special())
 			}
-			put(ctxt, s, s.Name, BSSSym, Symaddr(s), s.Gotype)
+			put(ctxt, s, s.Name, BSSSym, Symaddr(s))
 
 		case sym.SUNDEFEXT:
 			if ctxt.HeadType == objabi.Hwindows || ctxt.HeadType == objabi.Haix || ctxt.IsELF {
-				put(ctxt, s, s.Name, UndefinedSym, s.Value, nil)
+				put(ctxt, s, s.Name, UndefinedSym, s.Value)
 			}
 
 		case sym.SHOSTOBJ:
@@ -2586,24 +2623,24 @@ func genasmsym(ctxt *Link, put func(*Link, *sym.Symbol, string, SymbolType, int6
 				continue
 			}
 			if ctxt.HeadType == objabi.Hwindows || ctxt.IsELF {
-				put(ctxt, s, s.Name, UndefinedSym, s.Value, nil)
+				put(ctxt, s, s.Name, UndefinedSym, s.Value)
 			}
 
 		case sym.SDYNIMPORT:
 			if !s.Attr.Reachable() {
 				continue
 			}
-			put(ctxt, s, s.Extname(), UndefinedSym, 0, nil)
+			put(ctxt, s, s.Extname(), UndefinedSym, 0)
 
 		case sym.STLSBSS:
 			if ctxt.LinkMode == LinkExternal {
-				put(ctxt, s, s.Name, TLSSym, Symaddr(s), s.Gotype)
+				put(ctxt, s, s.Name, TLSSym, Symaddr(s))
 			}
 		}
 	}
 
 	for _, s := range ctxt.Textp {
-		put(ctxt, s, s.Name, TextSym, s.Value, s.Gotype)
+		put(ctxt, s, s.Name, TextSym, s.Value)
 	}
 
 	if ctxt.Debugvlog != 0 || *flagN {
@@ -2625,6 +2662,16 @@ func (ctxt *Link) xdefine(p string, t sym.SymKind, v int64) {
 	s.Attr |= sym.AttrReachable
 	s.Attr |= sym.AttrSpecial
 	s.Attr |= sym.AttrLocal
+}
+
+func (ctxt *Link) xdefine2(p string, t sym.SymKind, v int64) {
+	ldr := ctxt.loader
+	s := ldr.CreateSymForUpdate(p, 0)
+	s.SetType(t)
+	s.SetValue(v)
+	s.SetReachable(true)
+	s.SetSpecial(true)
+	s.SetLocal(true)
 }
 
 func datoff(s *sym.Symbol, addr int64) int64 {
@@ -2772,10 +2819,27 @@ func dfs(lib *sym.Library, mark map[*sym.Library]markKind, order *[]*sym.Library
 	*order = append(*order, lib)
 }
 
-func (ctxt *Link) loadlibfull() {
+// addToTextp populates the context Textp slice.
+func addToTextp(ctxt *Link) {
+	// Set up ctxt.Textp, based on ctxt.Textp2.
+	textp := make([]*sym.Symbol, 0, len(ctxt.Textp2))
+	haveshlibs := len(ctxt.Shlibs) > 0
+	for _, tsym := range ctxt.Textp2 {
+		sp := ctxt.loader.Syms[tsym]
+		if sp == nil || !ctxt.loader.AttrReachable(tsym) {
+			panic("should never happen")
+		}
+		if haveshlibs && sp.Type == sym.SDYNIMPORT {
+			continue
+		}
+		textp = append(textp, sp)
+	}
+	ctxt.Textp = textp
+}
 
+func (ctxt *Link) loadlibfull(symGroupType []sym.SymKind, needReloc, needExtReloc bool) {
 	// Load full symbol contents, resolve indexed references.
-	ctxt.loader.LoadFull(ctxt.Arch, ctxt.Syms)
+	ctxt.loader.LoadFull(ctxt.Arch, ctxt.Syms, needReloc, needExtReloc)
 
 	// Convert ctxt.Moduledata2 to ctxt.Moduledata, etc
 	if ctxt.Moduledata2 != 0 {
@@ -2784,7 +2848,7 @@ func (ctxt *Link) loadlibfull() {
 	}
 
 	// Pull the symbols out.
-	ctxt.loader.ExtractSymbols(ctxt.Syms, ctxt.Reachparent)
+	ctxt.loader.ExtractSymbols(ctxt.Syms)
 	ctxt.lookup = ctxt.Syms.ROLookup
 
 	// Recreate dynexp using *sym.Symbol instead of loader.Sym
@@ -2798,14 +2862,98 @@ func (ctxt *Link) loadlibfull() {
 	// Set special global symbols.
 	ctxt.setArchSyms(AfterLoadlibFull)
 
-	// Convert special symbols created by pcln.
-	pclntabFirstFunc = ctxt.loader.Syms[pclntabFirstFunc2]
-	pclntabLastFunc = ctxt.loader.Syms[pclntabLastFunc2]
+	// Populate dwarfp from dwarfp2. If we see a symbol index
+	// whose loader.Syms entry is nil, something went wrong.
+	for _, si := range dwarfp2 {
+		syms := make([]*sym.Symbol, 0, len(si.syms))
+		for _, symIdx := range si.syms {
+			s := ctxt.loader.Syms[symIdx]
+			if s == nil {
+				panic(fmt.Sprintf("nil sym for dwarfp2 element %d", symIdx))
+			}
+			s.Attr |= sym.AttrLocal
+			syms = append(syms, s)
+		}
+		dwarfp = append(dwarfp, dwarfSecInfo2{syms: syms})
+	}
+
+	// Populate datap from datap2
+	ctxt.datap = make([]*sym.Symbol, len(ctxt.datap2))
+	for i, symIdx := range ctxt.datap2 {
+		s := ctxt.loader.Syms[symIdx]
+		if s == nil {
+			panic(fmt.Sprintf("nil sym for datap2 element %d", symIdx))
+		}
+		ctxt.datap[i] = s
+	}
+
+	// Populate the sym.Section 'Sym' fields based on their 'Sym2'
+	// fields.
+	allSegments := []*sym.Segment{&Segtext, &Segrodata, &Segrelrodata, &Segdata, &Segdwarf}
+	for _, seg := range allSegments {
+		for _, sect := range seg.Sections {
+			if sect.Sym2 != 0 {
+				s := ctxt.loader.Syms[sect.Sym2]
+				if s == nil {
+					panic(fmt.Sprintf("nil sym for sect %s sym %d", sect.Name, sect.Sym2))
+				}
+				sect.Sym = s
+			}
+		}
+	}
+
+	// For now, overwrite symbol type with its "group" type, as dodata
+	// expected. Once we converted dodata, this will probably not be
+	// needed.
+	for i, t := range symGroupType {
+		if t != sym.Sxxx {
+			s := ctxt.loader.Syms[i]
+			if s == nil {
+				continue // in dwarfcompress we drop compressed DWARF symbols
+			}
+			s.Type = t
+		}
+	}
+	symGroupType = nil
+
+	if ctxt.Debugvlog > 1 {
+		// loadlibfull is likely a good place to dump.
+		// Only dump under -v=2 and above.
+		ctxt.dumpsyms()
+	}
+}
+
+func symPkg(ctxt *Link, s *sym.Symbol) string {
+	if s == nil {
+		return ""
+	}
+	return ctxt.loader.SymPkg(loader.Sym(s.SymIdx))
+}
+
+func ElfSymForReloc(ctxt *Link, s *sym.Symbol) int32 {
+	// If putelfsym created a local version of this symbol, use that in all
+	// relocations.
+	les := ctxt.loader.SymLocalElfSym(loader.Sym(s.SymIdx))
+	if les != 0 {
+		return les
+	} else {
+		return ctxt.loader.SymElfSym(loader.Sym(s.SymIdx))
+	}
+}
+
+func symSub(ctxt *Link, s *sym.Symbol) *sym.Symbol {
+	if lsub := ctxt.loader.SubSym(loader.Sym(s.SymIdx)); lsub != 0 {
+		return ctxt.loader.Syms[lsub]
+	}
+	return nil
 }
 
 func (ctxt *Link) dumpsyms() {
-	for _, s := range ctxt.Syms.Allsym {
-		fmt.Printf("%s %s %p %v %v\n", s, s.Type, s, s.Attr.Reachable(), s.Attr.OnList())
+	for _, s := range ctxt.loader.Syms {
+		if s == nil {
+			continue
+		}
+		fmt.Printf("%s %s reachable=%v onlist=%v outer=%v sub=%v\n", s, s.Type, s.Attr.Reachable(), s.Attr.OnList(), s.Outer, symSub(ctxt, s))
 		for i := range s.R {
 			fmt.Println("\t", s.R[i].Type, s.R[i].Sym)
 		}

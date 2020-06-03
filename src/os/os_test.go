@@ -2527,3 +2527,46 @@ func TestReaddirSmallSeek(t *testing.T) {
 		t.Fatalf("first names: %v, second names: %v", names1, names2)
 	}
 }
+
+// isDeadlineExceeded reports whether err is or wraps os.ErrDeadlineExceeded.
+// We also check that the error has a Timeout method that returns true.
+func isDeadlineExceeded(err error) bool {
+	if !IsTimeout(err) {
+		return false
+	}
+	if !errors.Is(err, ErrDeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
+// Test that opening a file does not change its permissions.  Issue 38225.
+func TestOpenFileKeepsPermissions(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	name := filepath.Join(dir, "x")
+	f, err := Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Error(err)
+	}
+	f, err = OpenFile(name, O_WRONLY|O_CREATE|O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := f.Stat(); err != nil {
+		t.Error(err)
+	} else if fi.Mode()&0222 == 0 {
+		t.Errorf("f.Stat.Mode after OpenFile is %v, should be writable", fi.Mode())
+	}
+	if err := f.Close(); err != nil {
+		t.Error(err)
+	}
+	if fi, err := Stat(name); err != nil {
+		t.Error(err)
+	} else if fi.Mode()&0222 == 0 {
+		t.Errorf("Stat after OpenFile is %v, should be writable", fi.Mode())
+	}
+}

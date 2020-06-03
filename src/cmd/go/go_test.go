@@ -6,7 +6,6 @@ package main_test
 
 import (
 	"bytes"
-	"context"
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
@@ -114,12 +113,6 @@ var testGo string
 var testTmpDir string
 var testBin string
 
-// testCtx is canceled when the test binary is about to time out.
-//
-// If https://golang.org/issue/28135 is accepted, uses of this variable in test
-// functions should be replaced by t.Context().
-var testCtx = context.Background()
-
 // The TestMain function creates a go command for testing purposes and
 // deletes it after the tests have been run.
 func TestMain(m *testing.M) {
@@ -134,19 +127,6 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("GOROOT_FINAL")
 
 	flag.Parse()
-
-	timeoutFlag := flag.Lookup("test.timeout")
-	if timeoutFlag != nil {
-		// TODO(golang.org/issue/28147): The go command does not pass the
-		// test.timeout flag unless either -timeout or -test.timeout is explicitly
-		// set on the command line.
-		if d := timeoutFlag.Value.(flag.Getter).Get().(time.Duration); d != 0 {
-			aBitShorter := d * 95 / 100
-			var cancel context.CancelFunc
-			testCtx, cancel = context.WithTimeout(testCtx, aBitShorter)
-			defer cancel()
-		}
-	}
 
 	if *proxyAddr != "" {
 		StartProxy()
@@ -829,10 +809,9 @@ func removeAll(dir string) error {
 	// module cache has 0444 directories;
 	// make them writable in order to remove content.
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // ignore errors walking in file system
-		}
-		if info.IsDir() {
+		// chmod not only directories, but also things that we couldn't even stat
+		// due to permission errors: they may also be unreadable directories.
+		if err != nil || info.IsDir() {
 			os.Chmod(path, 0777)
 		}
 		return nil
@@ -2082,19 +2061,38 @@ func TestBuildmodePIE(t *testing.T) {
 		t.Skipf("skipping test because buildmode=pie is not supported on %s", platform)
 	}
 	t.Run("non-cgo", func(t *testing.T) {
-		testBuildmodePIE(t, false)
+		testBuildmodePIE(t, false, true)
 	})
 	if canCgo {
 		switch runtime.GOOS {
 		case "darwin", "freebsd", "linux", "windows":
 			t.Run("cgo", func(t *testing.T) {
-				testBuildmodePIE(t, true)
+				testBuildmodePIE(t, true, true)
 			})
 		}
 	}
 }
 
-func testBuildmodePIE(t *testing.T, useCgo bool) {
+func TestWindowsDefaultBuildmodIsPIE(t *testing.T) {
+	if testing.Short() && testenv.Builder() == "" {
+		t.Skipf("skipping in -short mode on non-builder")
+	}
+
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping windows only test")
+	}
+
+	t.Run("non-cgo", func(t *testing.T) {
+		testBuildmodePIE(t, false, false)
+	})
+	if canCgo {
+		t.Run("cgo", func(t *testing.T) {
+			testBuildmodePIE(t, true, false)
+		})
+	}
+}
+
+func testBuildmodePIE(t *testing.T, useCgo, setBuildmodeToPIE bool) {
 	tg := testgo(t)
 	defer tg.cleanup()
 	tg.parallel()
@@ -2106,7 +2104,12 @@ func testBuildmodePIE(t *testing.T, useCgo bool) {
 	tg.tempFile("main.go", fmt.Sprintf(`package main;%s func main() { print("hello") }`, s))
 	src := tg.path("main.go")
 	obj := tg.path("main.exe")
-	tg.run("build", "-buildmode=pie", "-o", obj, src)
+	args := []string{"build"}
+	if setBuildmodeToPIE {
+		args = append(args, "-buildmode=pie")
+	}
+	args = append(args, "-o", obj, src)
+	tg.run(args...)
 
 	switch runtime.GOOS {
 	case "linux", "android", "freebsd":

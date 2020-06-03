@@ -252,7 +252,7 @@ func forcegchelper() {
 			throw("forcegc: phase error")
 		}
 		atomic.Store(&forcegc.idle, 1)
-		goparkunlock(&forcegc.lock, waitReasonForceGGIdle, traceEvGoBlock, 1)
+		goparkunlock(&forcegc.lock, waitReasonForceGCIdle, traceEvGoBlock, 1)
 		// this goroutine is explicitly resumed by sysmon
 		if debug.gctrace > 0 {
 			println("GC forced")
@@ -533,6 +533,7 @@ func cpuinit() {
 // The new G calls runtime·main.
 func schedinit() {
 	lockInit(&sched.lock, lockRankSched)
+	lockInit(&sched.sysmonlock, lockRankSysmon)
 	lockInit(&sched.deferlock, lockRankDefer)
 	lockInit(&sched.sudoglock, lockRankSudog)
 	lockInit(&deadlock, lockRankDeadlock)
@@ -690,9 +691,7 @@ func ready(gp *g, traceskip int, next bool) {
 	// status is Gwaiting or Gscanwaiting, make Grunnable and put on runq
 	casgstatus(gp, _Gwaiting, _Grunnable)
 	runqput(_g_.m.p.ptr(), gp, next)
-	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
-		wakep()
-	}
+	wakep()
 	releasem(mp)
 }
 
@@ -762,6 +761,7 @@ func casfrom_Gscanstatus(gp *g, oldval, newval uint32) {
 		dumpgstatus(gp)
 		throw("casfrom_Gscanstatus: gp->status is not in scan state")
 	}
+	releaseLockRank(lockRankGscan)
 }
 
 // This will return false if the gp is not in the expected status and the cas fails.
@@ -773,7 +773,12 @@ func castogscanstatus(gp *g, oldval, newval uint32) bool {
 		_Gwaiting,
 		_Gsyscall:
 		if newval == oldval|_Gscan {
-			return atomic.Cas(&gp.atomicstatus, oldval, newval)
+			r := atomic.Cas(&gp.atomicstatus, oldval, newval)
+			if r {
+				acquireLockRank(lockRankGscan)
+			}
+			return r
+
 		}
 	}
 	print("runtime: castogscanstatus oldval=", hex(oldval), " newval=", hex(newval), "\n")
@@ -793,6 +798,9 @@ func casgstatus(gp *g, oldval, newval uint32) {
 			throw("casgstatus: bad incoming values")
 		})
 	}
+
+	acquireLockRank(lockRankGscan)
+	releaseLockRank(lockRankGscan)
 
 	// See https://golang.org/cl/21503 for justification of the yield delay.
 	const yieldDelay = 5 * 1000
@@ -844,6 +852,7 @@ func casGToPreemptScan(gp *g, old, new uint32) {
 	if old != _Grunning || new != _Gscan|_Gpreempted {
 		throw("bad g transition")
 	}
+	acquireLockRank(lockRankGscan)
 	for !atomic.Cas(&gp.atomicstatus, _Grunning, _Gscan|_Gpreempted) {
 	}
 }
@@ -1072,9 +1081,7 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 	// Wakeup an additional proc in case we have excessive runnable goroutines
 	// in local queues or in the global queue. If we don't, the proc will park itself.
 	// If we have lots of excessive work, resetspinning will unpark additional procs as necessary.
-	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
-		wakep()
-	}
+	wakep()
 
 	releasem(mp)
 
@@ -1695,8 +1702,7 @@ func lockextra(nilokay bool) *m {
 	for {
 		old := atomic.Loaduintptr(&extram)
 		if old == locked {
-			yield := osyield
-			yield()
+			osyield()
 			continue
 		}
 		if old == 0 && !nilokay {
@@ -1713,8 +1719,7 @@ func lockextra(nilokay bool) *m {
 		if atomic.Casuintptr(&extram, old, locked) {
 			return (*m)(unsafe.Pointer(old))
 		}
-		yield := osyield
-		yield()
+		osyield()
 		continue
 	}
 }
@@ -1815,10 +1820,16 @@ func startTemplateThread() {
 	if GOARCH == "wasm" { // no threads on wasm yet
 		return
 	}
+
+	// Disable preemption to guarantee that the template thread will be
+	// created before a park once haveTemplateThread is set.
+	mp := acquirem()
 	if !atomic.Cas(&newmHandoff.haveTemplateThread, 0, 1) {
+		releasem(mp)
 		return
 	}
 	newm(templateThread, nil)
+	releasem(mp)
 }
 
 // templateThread is a thread in a known-good state that exists solely
@@ -1999,8 +2010,11 @@ func handoffp(_p_ *p) {
 // Tries to add one more P to execute G's.
 // Called when a G is made runnable (newproc, ready).
 func wakep() {
+	if atomic.Load(&sched.npidle) == 0 {
+		return
+	}
 	// be conservative about spinning threads
-	if !atomic.Cas(&sched.nmspinning, 0, 1) {
+	if atomic.Load(&sched.nmspinning) != 0 || !atomic.Cas(&sched.nmspinning, 0, 1) {
 		return
 	}
 	startm(nil, true)
@@ -2217,11 +2231,14 @@ top:
 			// Consider stealing timers from p2.
 			// This call to checkTimers is the only place where
 			// we hold a lock on a different P's timers.
-			// Lock contention can be a problem here, so avoid
-			// grabbing the lock if p2 is running and not marked
-			// for preemption. If p2 is running and not being
-			// preempted we assume it will handle its own timers.
-			if i > 2 && shouldStealTimers(p2) {
+			// Lock contention can be a problem here, so
+			// initially avoid grabbing the lock if p2 is running
+			// and is not marked for preemption. If p2 is running
+			// and not being preempted we assume it will handle its
+			// own timers.
+			// If we're still looking for work after checking all
+			// the P's, then go ahead and steal from an active P.
+			if i > 2 || (i > 1 && shouldStealTimers(p2)) {
 				tnow, w, ran := checkTimers(p2, now)
 				now = tnow
 				if w != 0 && (pollUntil == 0 || w < pollUntil) {
@@ -2272,9 +2289,17 @@ stop:
 
 	// wasm only:
 	// If a callback returned and no other goroutine is awake,
-	// then pause execution until a callback was triggered.
-	if beforeIdle(delta) {
-		// At least one goroutine got woken.
+	// then wake event handler goroutine which pauses execution
+	// until a callback was triggered.
+	gp, otherReady := beforeIdle(delta)
+	if gp != nil {
+		casgstatus(gp, _Gwaiting, _Grunnable)
+		if trace.enabled {
+			traceGoUnpark(gp, 0)
+		}
+		return gp, false
+	}
+	if otherReady {
 		goto top
 	}
 
@@ -2464,9 +2489,7 @@ func resetspinning() {
 	// M wakeup policy is deliberately somewhat conservative, so check if we
 	// need to wakeup another P here. See "Worker thread parking/unparking"
 	// comment at the top of the file for details.
-	if nmspinning == 0 && atomic.Load(&sched.npidle) > 0 {
-		wakep()
-	}
+	wakep()
 }
 
 // injectglist adds each runnable G on the list to some run queue,
@@ -2640,9 +2663,7 @@ top:
 	// If about to schedule a not-normal goroutine (a GCworker or tracereader),
 	// wake a P if there is one.
 	if tryWakeP {
-		if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
-			wakep()
-		}
+		wakep()
 	}
 	if gp.lockedm != 0 {
 		// Hands off own p to the locked m,
@@ -3454,23 +3475,44 @@ func malg(stacksize int32) *g {
 // Create a new g running fn with siz bytes of arguments.
 // Put it on the queue of g's waiting to run.
 // The compiler turns a go statement into a call to this.
-// Cannot split the stack because it assumes that the arguments
-// are available sequentially after &fn; they would not be
-// copied if a stack split occurred.
+//
+// The stack layout of this call is unusual: it assumes that the
+// arguments to pass to fn are on the stack sequentially immediately
+// after &fn. Hence, they are logically part of newproc's argument
+// frame, even though they don't appear in its signature (and can't
+// because their types differ between call sites).
+//
+// This must be nosplit because this stack layout means there are
+// untyped arguments in newproc's argument frame. Stack copies won't
+// be able to adjust them and stack splits won't be able to copy them.
+//
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
 	gp := getg()
 	pc := getcallerpc()
 	systemstack(func() {
-		newproc1(fn, argp, siz, gp, pc)
+		newg := newproc1(fn, argp, siz, gp, pc)
+
+		_p_ := getg().m.p.ptr()
+		runqput(_p_, newg, true)
+
+		if mainStarted {
+			wakep()
+		}
 	})
 }
 
-// Create a new g running fn with narg bytes of arguments starting
-// at argp. callerpc is the address of the go statement that created
-// this. The new g is put on the queue of g's waiting to run.
-func newproc1(fn *funcval, argp unsafe.Pointer, narg int32, callergp *g, callerpc uintptr) {
+// Create a new g in state _Grunnable, starting at fn, with narg bytes
+// of arguments starting at argp. callerpc is the address of the go
+// statement that created this. The caller is responsible for adding
+// the new g to the scheduler.
+//
+// This must run on the system stack because it's the continuation of
+// newproc, which cannot split the stack.
+//
+//go:systemstack
+func newproc1(fn *funcval, argp unsafe.Pointer, narg int32, callergp *g, callerpc uintptr) *g {
 	_g_ := getg()
 
 	if fn == nil {
@@ -3566,12 +3608,9 @@ func newproc1(fn *funcval, argp unsafe.Pointer, narg int32, callergp *g, callerp
 	if trace.enabled {
 		traceGoCreate(newg, newg.startpc)
 	}
-	runqput(_p_, newg, true)
-
-	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
-		wakep()
-	}
 	releasem(_g_.m)
+
+	return newg
 }
 
 // saveAncestors copies previous ancestors of the given caller g and
@@ -4592,6 +4631,18 @@ func sysmon() {
 			}
 			unlock(&sched.lock)
 		}
+		lock(&sched.sysmonlock)
+		{
+			// If we spent a long time blocked on sysmonlock
+			// then we want to update now and next since it's
+			// likely stale.
+			now1 := nanotime()
+			if now1-now > 50*1000 /* 50µs */ {
+				next, _ = timeSleepUntil()
+			}
+			now = now1
+		}
+
 		// trigger libc interceptors if needed
 		if *cgo_yield != nil {
 			asmcgocall(*cgo_yield, nil)
@@ -4620,6 +4671,10 @@ func sysmon() {
 			// Try to start an M to run them.
 			startm(nil, false)
 		}
+		if atomic.Load(&scavenge.sysmonWake) != 0 {
+			// Kick the scavenger awake if someone requested it.
+			wakeScavenger()
+		}
 		// retake P's blocked in syscalls
 		// and preempt long running G's
 		if retake(now) != 0 {
@@ -4640,6 +4695,7 @@ func sysmon() {
 			lasttrace = now
 			schedtrace(debug.scheddetail > 0)
 		}
+		unlock(&sched.sysmonlock)
 	}
 }
 
