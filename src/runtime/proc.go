@@ -301,12 +301,12 @@ func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason w
 	mp.waittraceskip = traceskip
 	releasem(mp)
 	// can't do anything that might move the G between Ms here.
-	mcall(park_m)  // 切换到g0栈执行park_m函数
+	mcall(park_m)  // 切换到g0栈执行park_m函数（如果unlockf返回true，将当前g改为_Gwaiting，接着进入调度。反之则立马继续执行此g），当前g阻塞在这里，如果当前g后面又被调度，则会接着往下执行
 }
 
 // Puts the current goroutine into a waiting state and unlocks the lock.
 // The goroutine can be made runnable again by calling goready(gp).
-func goparkunlock(lock *mutex, reason waitReason, traceEv byte, traceskip int) {
+func goparkunlock(lock *mutex, reason waitReason, traceEv byte, traceskip int) {  // 作用是停止当前g且标记为waiting，然后进入调度。g想要重新被调度需要执行goready
 	gopark(parkunlock_c, unsafe.Pointer(lock), reason, traceEv, traceskip)
 }
 
@@ -655,7 +655,7 @@ func fastrandinit() {
 }
 
 // Mark gp ready to run.
-func ready(gp *g, traceskip int, next bool) {
+func ready(gp *g, traceskip int, next bool) {  // _Gwaiting改成_Grunnable，且放入队列，让g变得可被调度
 	if trace.enabled {
 		traceGoUnpark(gp, traceskip)
 	}
@@ -672,7 +672,7 @@ func ready(gp *g, traceskip int, next bool) {
 
 	// status is Gwaiting or Gscanwaiting, make Grunnable and put on runq
 	casgstatus(gp, _Gwaiting, _Grunnable)
-	runqput(_g_.m.p.ptr(), gp, next)
+	runqput(_g_.m.p.ptr(), gp, next)  // 放到全局runnable队列
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
 		wakep()
 	}
@@ -896,7 +896,7 @@ var worldsema uint32 = 1
 // startTheWorldWithSema and stopTheWorldWithSema.
 // Holding worldsema causes any other goroutines invoking
 // stopTheWorld to block.
-func stopTheWorldWithSema() {
+func stopTheWorldWithSema() {  // 停止所有p
 	_g_ := getg()
 
 	// If we hold a lock, then we won't be able to stop another M
@@ -906,14 +906,14 @@ func stopTheWorldWithSema() {
 	}
 
 	lock(&sched.lock)
-	sched.stopwait = gomaxprocs
-	atomic.Store(&sched.gcwaiting, 1)
-	preemptall()
+	sched.stopwait = gomaxprocs  // 设置等待停止（p设置为_Pgcstop）的p的数量。allp的length等于gomaxprocs
+	atomic.Store(&sched.gcwaiting, 1)  // gcwaiting改成1。在schedule函数中会检查gcwaiting变量，如果是一则进入死循环
+	preemptall()  // 被动抢占所有p下正在运行的g，这之后，所有的m都将进入休眠，直到gcwaiting变成0。m休眠前会释放m并进行sched.stopwait--
 	// stop current P
-	_g_.m.p.ptr().status = _Pgcstop // Pgcstop is only diagnostic.
-	sched.stopwait--
+	_g_.m.p.ptr().status = _Pgcstop // Pgcstop is only diagnostic. 当前p设置为_Pgcstop
+	sched.stopwait--  // 减掉一个。自身m不能休眠，正在进行GC呢
 	// try to retake all P's in Psyscall status
-	for _, p := range allp {
+	for _, p := range allp {  // 抢占所有处于系统调用中的p。这里把部分_Psyscall的p的状态置为_Pgcstop了
 		s := p.status
 		if s == _Psyscall && atomic.Cas(&p.status, s, _Pgcstop) {
 			if trace.enabled {
@@ -924,7 +924,7 @@ func stopTheWorldWithSema() {
 			sched.stopwait--
 		}
 	}
-	// stop idle P's
+	// stop idle P's  停止allp中所有空闲的p
 	for {
 		p := pidleget()
 		if p == nil {
@@ -937,7 +937,7 @@ func stopTheWorldWithSema() {
 	unlock(&sched.lock)
 
 	// wait for remaining P's to stop voluntarily
-	if wait {
+	if wait {  // 如果还有没关闭的p，每100us去被动抢占一次。真实目的是循环等待除自己外的其他m进入休眠
 		for {
 			// wait for 100us, then try to re-preempt in case of any races
 			if notetsleep(&sched.stopnote, 100*1000) {
@@ -948,7 +948,7 @@ func stopTheWorldWithSema() {
 		}
 	}
 
-	// sanity checks
+	// sanity checks stopwait正确性检查
 	bad := ""
 	if sched.stopwait != 0 {
 		bad = "stopTheWorld: not stopped (stopwait != 0)"
@@ -985,8 +985,8 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 		procs = newprocs
 		newprocs = 0
 	}
-	p1 := procresize(procs)
-	sched.gcwaiting = 0
+	p1 := procresize(procs)  // 返回p链表的第一个p
+	sched.gcwaiting = 0  // 设置为0，其他m被唤醒后将正常寻找g
 	if sched.sysmonwait != 0 {
 		sched.sysmonwait = 0
 		notewakeup(&sched.sysmonnote)
@@ -995,18 +995,18 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 
 	for p1 != nil {
 		p := p1
-		p1 = p1.link.ptr()
-		if p.m != 0 {
+		p1 = p1.link.ptr()  // 循环所有p
+		if p.m != 0 {  // 这个p已经被附加了
 			mp := p.m.ptr()
 			p.m = 0
 			if mp.nextp != 0 {
 				throw("startTheWorld: inconsistent mp->nextp")
 			}
 			mp.nextp.set(p)
-			notewakeup(&mp.park)
-		} else {
+			notewakeup(&mp.park)  // 将m从休眠中唤醒
+		} else {  // 如果这个p没有被附加
 			// Start M to run P.  Do not start another M below.
-			newm(nil, p)
+			newm(nil, p)  // 新建一个m
 		}
 	}
 
@@ -1019,8 +1019,8 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 	// Wakeup an additional proc in case we have excessive runnable goroutines
 	// in local queues or in the global queue. If we don't, the proc will park itself.
 	// If we have lots of excessive work, resetspinning will unpark additional procs as necessary.
-	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
-		wakep()
+	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {  // 如果存在空闲的p（没有m附加它）且没有正在自旋的m
+		wakep()  // 唤醒一个m（m被唤醒后又会开始找工作）或者新建一个m（m新建后就会执行mstart函数）
 	}
 
 	releasem(mp)
@@ -1825,7 +1825,7 @@ func stopm() {
 	lock(&sched.lock)
 	mput(_g_.m)
 	unlock(&sched.lock)
-	notesleep(&_g_.m.park)
+	notesleep(&_g_.m.park)  // 让线程进入睡眠
 	noteclear(&_g_.m.park)
 	acquirep(_g_.m.nextp.ptr())
 	_g_.m.nextp = 0
@@ -2017,15 +2017,15 @@ func gcstopm() {
 			throw("gcstopm: negative nmspinning")
 		}
 	}
-	_p_ := releasep()
+	_p_ := releasep()  // 释放当前p
 	lock(&sched.lock)
-	_p_.status = _Pgcstop
-	sched.stopwait--
-	if sched.stopwait == 0 {
+	_p_.status = _Pgcstop  // 将当前p状态改成_Pgcstop
+	sched.stopwait--  // 等待关闭的p的数量减1
+	if sched.stopwait == 0 {  // 如果所有p关闭完了
 		notewakeup(&sched.stopnote)
 	}
 	unlock(&sched.lock)
-	stopm()
+	stopm()  // 停止m，使其进入睡眠
 }
 
 // Schedules gp to run on the current M.
@@ -2037,7 +2037,7 @@ func gcstopm() {
 // acquiring a P in several places.
 //
 //go:yeswritebarrierrec
-func execute(gp *g, inheritTime bool) {
+func execute(gp *g, inheritTime bool) {  // 立即在当前m上恢复指定g上下文，然后执行它
 	_g_ := getg()
 
 	// Assign gp.m before entering _Grunning so running Gs have an
@@ -2465,8 +2465,8 @@ top:
 	pp := _g_.m.p.ptr()
 	pp.preempt = false
 
-	if sched.gcwaiting != 0 {
-		gcstopm()
+	if sched.gcwaiting != 0 {  // 是否正在GC，如果在的话，不让m找到g
+		gcstopm()  // 休眠m
 		goto top
 	}
 	if pp.runSafePointFn != 0 {
@@ -2498,16 +2498,16 @@ top:
 		}
 	}
 	if gp == nil && gcBlackenEnabled != 0 {
-		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())
+		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())  // 找到一个可运行的垃圾回收g
 		tryWakeP = tryWakeP || gp != nil
 	}
 	if gp == nil {
 		// Check the global runnable queue once in a while to ensure fairness.
 		// Otherwise two goroutines can completely occupy the local runqueue
 		// by constantly respawning each other.
-		if _g_.m.p.ptr().schedtick%61 == 0 && sched.runqsize > 0 {
+		if _g_.m.p.ptr().schedtick%61 == 0 && sched.runqsize > 0 { // 如果全局g队列中有g而且p调度了61的倍数次，避免全局队列中的g被饿死
 			lock(&sched.lock)
-			gp = globrunqget(_g_.m.p.ptr(), 1)
+			gp = globrunqget(_g_.m.p.ptr(), 1) // 从全局g runnable队列拿出一个到当前p，并pop一个g出来
 			unlock(&sched.lock)
 		}
 	}
@@ -2517,7 +2517,7 @@ top:
 		// if checkTimers added a local goroutine via goready.
 	}
 	if gp == nil {
-		gp, inheritTime = findrunnable() // blocks until work is available
+		gp, inheritTime = findrunnable() // blocks until work is available  阻塞在这里，要么自旋要么进入休眠，直到有g可用
 	}
 
 	// This thread is going to run a goroutine and is not spinning anymore,
@@ -4640,7 +4640,7 @@ func retake(now int64) uint32 {
 // processor just started running it.
 // No locks need to be held.
 // Returns true if preemption request was issued to at least one goroutine.
-func preemptall() bool {
+func preemptall() bool {  // 抢占所有p下面的正在运行的g（被动抢占）
 	res := false
 	for _, _p_ := range allp {
 		if _p_.status != _Prunning {
@@ -4663,23 +4663,23 @@ func preemptall() bool {
 // The actual preemption will happen at some point in the future
 // and will be indicated by the gp->status no longer being
 // Grunning
-func preemptone(_p_ *p) bool {
+func preemptone(_p_ *p) bool {  // 抢占p下的当前g
 	mp := _p_.m.ptr()
 	if mp == nil || mp == getg().m {
 		return false
 	}
-	gp := mp.curg
+	gp := mp.curg  // 获取当前g
 	if gp == nil || gp == mp.g0 {
 		return false
 	}
 
-	gp.preempt = true
+	gp.preempt = true  // 抢占标记设置为true，表示这个g应该被抢占
 
 	// Every call in a go routine checks for stack overflow by
 	// comparing the current stack pointer to gp->stackguard0.
 	// Setting gp->stackguard0 to StackPreempt folds
 	// preemption into the normal stack overflow check.
-	gp.stackguard0 = stackPreempt
+	gp.stackguard0 = stackPreempt  // 使morestack的时候被抢占
 
 	// Request an async preemption of this P.
 	if preemptMSupported && debug.asyncpreemptoff == 0 {

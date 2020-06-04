@@ -70,15 +70,15 @@ func bgsweep(c chan int) {
 	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
 
 	for {
-		for sweepone() != ^uintptr(0) {
+		for sweepone() != ^uintptr(0) { // 一个个span擦除，直到找不到可以擦除的span才跳出循环
 			sweep.nbgsweep++
-			Gosched()
+			Gosched()  // 让出CPU
 		}
-		for freeSomeWbufs(true) {
+		for freeSomeWbufs(true) {  // 释放workbufs
 			Gosched()
 		}
 		lock(&sweep.lock)
-		if !isSweepDone() {
+		if !isSweepDone() {  // 检查擦除是否完成，没完成的话继续
 			// This can happen if a GC runs between
 			// gosweepone returning ^0 above
 			// and the lock being acquired.
@@ -86,7 +86,7 @@ func bgsweep(c chan int) {
 			continue
 		}
 		sweep.parked = true
-		goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+		goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)  // 停止当前g，进入调度
 	}
 }
 
@@ -133,7 +133,7 @@ func sweepone() uintptr {
 	npages := ^uintptr(0)
 	if s != nil {
 		npages = s.npages
-		if s.sweep(false) {
+		if s.sweep(false) {  // 擦除这个span
 			// Whole span was freed. Count it toward the
 			// page reclaimer credit since these pages can
 			// now be used for span allocation.

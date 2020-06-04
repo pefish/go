@@ -1090,7 +1090,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	// This may be racing with GC so do it atomically if there can be
 	// a race marking the bit.
 	if gcphase != _GCoff {
-		gcmarknewobject(uintptr(x), size, scanSize)  // gc标记这个对象
+		gcmarknewobject(uintptr(x), size, scanSize)  // gc标记这个对象为黑色
 	}
 
 	if raceenabled {

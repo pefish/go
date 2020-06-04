@@ -195,7 +195,7 @@ type mheap struct {
 	// central is indexed by spanClass.
 	central [numSpanClasses]struct {
 		mcentral mcentral
-		pad      [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte
+		pad      [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte  // 缓存行填充，提高效率
 	}
 
 	spanalloc             fixalloc // allocator for span*
@@ -1179,7 +1179,7 @@ HaveSpan:
 		// We must set span properties before the span is published anywhere
 		// since we're not holding the heap lock.
 		s.spanclass = spanclass
-		if sizeclass := spanclass.sizeclass(); sizeclass == 0 {
+		if sizeclass := spanclass.sizeclass(); sizeclass == 0 {  // sizeclass = spanclass / 2，sizeclass是class_to_size数组的索引
 			s.elemsize = nbytes
 			s.nelems = 1
 

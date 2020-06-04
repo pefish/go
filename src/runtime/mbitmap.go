@@ -394,8 +394,8 @@ func badPointer(s *mspan, p, refBase, refOff uintptr) {
 // It is nosplit so it is safe for p to be a pointer to the current goroutine's stack.
 // Since p is a uintptr, it would not be adjusted if the stack were to move.
 //go:nosplit
-func findObject(p, refBase, refOff uintptr) (base uintptr, s *mspan, objIndex uintptr) {
-	s = spanOf(p)
+func findObject(p, refBase, refOff uintptr) (base uintptr, s *mspan, objIndex uintptr) {  //
+	s = spanOf(p)  // 找到p所在的span
 	// If s is nil, the virtual address has never been part of the heap.
 	// This pointer may be to some mmap'd region, so we allow it.
 	if s == nil {
@@ -405,7 +405,7 @@ func findObject(p, refBase, refOff uintptr) (base uintptr, s *mspan, objIndex ui
 	//
 	// Check s.state to synchronize with span initialization
 	// before checking other fields. See also spanOfHeap.
-	if state := s.state.get(); state != mSpanInUse || p < s.base() || p >= s.limit {
+	if state := s.state.get(); state != mSpanInUse || p < s.base() || p >= s.limit {  // 校验，如果span状态不对或者p位置不在span之内
 		// Pointers into stacks are also ok, the runtime manages these explicitly.
 		if state == mSpanManual {
 			return

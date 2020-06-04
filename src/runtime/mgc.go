@@ -211,8 +211,8 @@ func readgogc() int32 {
 func gcenable() {
 	// Kick off sweeping and scavenging.
 	c := make(chan int, 2)
-	go bgsweep(c)
-	go bgscavenge(c)
+	go bgsweep(c)  // 启动gc擦除的协程
+	go bgscavenge(c)  // 启动gc碎片清理的协程
 	<-c
 	<-c
 	memstats.enablegc = true // now that runtime is initialized, GC is okay
@@ -1088,15 +1088,15 @@ func GC() {
 	// Wait until the current sweep termination, mark, and mark
 	// termination complete.
 	n := atomic.Load(&work.cycles)
-	gcWaitOnMark(n)  // 这里应该会一直阻塞，没搞懂
+	gcWaitOnMark(n)  // 这里会一直阻塞等待并发标记结束，直到这个g被重新激活（调用goready）并调度
 
 	// We're now in sweep N or later. Trigger GC cycle N+1, which
 	// will first finish sweep N if necessary and then enter sweep
 	// termination N+1.
-	gcStart(gcTrigger{kind: gcTriggerCycle, n: n + 1})
+	gcStart(gcTrigger{kind: gcTriggerCycle, n: n + 1})  // 开始GC清理。其中会STW然后sweep
 
 	// Wait for mark termination N+1 to complete.
-	gcWaitOnMark(n + 1)
+	gcWaitOnMark(n + 1)  // 再一次等待并发标记
 
 	// Finish sweep N+1 before returning. We do this both to
 	// complete the cycle and because runtime.GC() is often used
@@ -1291,7 +1291,7 @@ func gcStart(trigger gcTrigger) {
 		}
 	}
 
-	gcBgMarkStartWorkers()
+	gcBgMarkStartWorkers()  // 检查所有p，保证所有p下面都有一个用来标记的g协程
 
 	systemstack(gcResetMarkState)
 
@@ -1311,10 +1311,10 @@ func gcStart(trigger gcTrigger) {
 	if trace.enabled {
 		traceGCSTWStart(1)
 	}
-	systemstack(stopTheWorldWithSema)
+	systemstack(stopTheWorldWithSema)  // g0栈中执行STW停止所有p，这句执行完后，其他m都进入了休眠
 	// Finish sweep before we start concurrent scan.
 	systemstack(func() {
-		finishsweep_m()
+		finishsweep_m()  // 擦除所有可擦除的span
 	})
 	// clearpools before we start the GC. If we wait they memory will not be
 	// reclaimed until the next GC cycle.
@@ -1356,7 +1356,7 @@ func gcStart(trigger gcTrigger) {
 	// other allocations. The alternative is to blacken
 	// the tiny block on every allocation from it, which
 	// would slow down the tiny allocator.
-	gcMarkTinyAllocs()
+	gcMarkTinyAllocs()  // 对所有p下的mcache中的tiny块进行标记
 
 	// At this point all Ps have enabled the write
 	// barrier, thus maintaining the no white to
@@ -1371,7 +1371,7 @@ func gcStart(trigger gcTrigger) {
 
 	// Concurrent mark.
 	systemstack(func() {
-		now = startTheWorldWithSema(trace.enabled)
+		now = startTheWorldWithSema(trace.enabled)  // 重启世界，这句之后所有m都被唤醒了
 		work.pauseNS += now - work.pauseStart
 		work.tMark = now
 	})
@@ -1379,7 +1379,7 @@ func gcStart(trigger gcTrigger) {
 	// returns, so don't do anything important here. Make sure we
 	// block rather than returning to user code.
 	if mode != gcBackgroundMode {
-		Gosched()
+		Gosched()  // 进入调度，目的是让出CPU
 	}
 
 	semrelease(&work.startSema)
@@ -1841,7 +1841,7 @@ func gcBgMarkPrepare() {
 	work.nwait = ^uint32(0)
 }
 
-func gcBgMarkWorker(_p_ *p) {
+func gcBgMarkWorker(_p_ *p) {  // 标记协程的启动函数
 	gp := getg()
 
 	type parkInfo struct {

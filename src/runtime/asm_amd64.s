@@ -300,7 +300,7 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	LEAQ	fn+0(FP), BX	// caller's SP
 	MOVQ	BX, (g_sched+gobuf_sp)(AX)  // 保存g的SP到g.sched.gobuf.sp
 	MOVQ	AX, (g_sched+gobuf_g)(AX)  // 保存g到g.sched.gobuf.g
-	MOVQ	BP, (g_sched+gobuf_bp)(AX)  // 保存BP到g.sched.gobuf.bp
+	MOVQ	BP, (g_sched+gobuf_bp)(AX)  // 保存BP到g.sched.gobuf.bp。这里往上都是保存g的上下文到g.sched.gobuf，下次可以恢复上下文接着执行
 
 	// switch to m->g0 & its stack, call fn
 	MOVQ	g(CX), BX

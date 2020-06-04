@@ -1536,9 +1536,9 @@ func gcMarkTinyAllocs() {
 		if c == nil || c.tiny == 0 {
 			continue
 		}
-		_, span, objIndex := findObject(c.tiny, 0, 0)
+		_, span, objIndex := findObject(c.tiny, 0, 0)  // 找到tiny块所处的span，以及所在的对象索引
 		gcw := &p.gcw
-		greyobject(c.tiny, 0, 0, span, gcw, objIndex)
+		greyobject(c.tiny, 0, 0, span, gcw, objIndex)  // 灰色标记tiny对象
 	}
 }
 

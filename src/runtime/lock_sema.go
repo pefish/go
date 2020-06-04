@@ -133,7 +133,7 @@ func noteclear(n *note) {
 
 func notewakeup(n *note) {
 	var v uintptr
-	for {
+	for {  // 不断尝试设置n.key为1，也就是locked
 		v = atomic.Loaduintptr(&n.key)
 		if atomic.Casuintptr(&n.key, v, locked) {
 			break
@@ -150,7 +150,7 @@ func notewakeup(n *note) {
 		throw("notewakeup - double wakeup")
 	default:
 		// Must be the waiting m. Wake it up.
-		semawakeup((*m)(unsafe.Pointer(v)))
+		semawakeup((*m)(unsafe.Pointer(v)))  // 真正通过系统调用唤醒m
 	}
 }
 
@@ -170,7 +170,7 @@ func notesleep(n *note) {
 	// Queued. Sleep.
 	gp.m.blocked = true
 	if *cgo_yield == nil {
-		semasleep(-1)
+		semasleep(-1)  // 使用系统调用，让线程进入睡眠
 	} else {
 		// Sleep for an arbitrary-but-moderate interval to poll libc interceptors.
 		const ns = 10e6
