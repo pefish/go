@@ -286,39 +286,39 @@ TEXT runtime·gogo(SB), NOSPLIT, $16-8
 	MOVQ	gobuf_pc(BX), BX
 	JMP	BX
 
-// func mcall(fn func(*g))
+// func mcall(fn func(*g))  切换到g0栈，并且执行fn函数
 // Switch to m->g0's stack, call fn(g).
 // Fn must never return. It should gogo(&g->sched)
 // to keep running g.
 TEXT runtime·mcall(SB), NOSPLIT, $0-8
-	MOVQ	fn+0(FP), DI
+	MOVQ	fn+0(FP), DI  // fn+0(FP)表示第一个参数的实际位置，也就是caller's SP，放到DI
 
 	get_tls(CX)
 	MOVQ	g(CX), AX	// save state in g->sched
 	MOVQ	0(SP), BX	// caller's PC
-	MOVQ	BX, (g_sched+gobuf_pc)(AX)
+	MOVQ	BX, (g_sched+gobuf_pc)(AX)  // 保存g的PC到g.sched.gobuf.pc
 	LEAQ	fn+0(FP), BX	// caller's SP
-	MOVQ	BX, (g_sched+gobuf_sp)(AX)
-	MOVQ	AX, (g_sched+gobuf_g)(AX)
-	MOVQ	BP, (g_sched+gobuf_bp)(AX)
+	MOVQ	BX, (g_sched+gobuf_sp)(AX)  // 保存g的SP到g.sched.gobuf.sp
+	MOVQ	AX, (g_sched+gobuf_g)(AX)  // 保存g到g.sched.gobuf.g
+	MOVQ	BP, (g_sched+gobuf_bp)(AX)  // 保存BP到g.sched.gobuf.bp
 
 	// switch to m->g0 & its stack, call fn
 	MOVQ	g(CX), BX
-	MOVQ	g_m(BX), BX
-	MOVQ	m_g0(BX), SI
-	CMPQ	SI, AX	// if g == m->g0 call badmcall
-	JNE	3(PC)
+	MOVQ	g_m(BX), BX  // 当前m放入BX
+	MOVQ	m_g0(BX), SI  // m.g0放入SI
+	CMPQ	SI, AX	// if g == m->g0 call badmcall 比较g0与当前g
+	JNE	3(PC)  // 不相等的话跳到后面第三行
 	MOVQ	$runtime·badmcall(SB), AX
-	JMP	AX
-	MOVQ	SI, g(CX)	// g = m->g0
-	MOVQ	(g_sched+gobuf_sp)(SI), SP	// sp = m->g0->sched.sp
-	PUSHQ	AX
-	MOVQ	DI, DX
-	MOVQ	0(DI), DI
-	CALL	DI
-	POPQ	AX
+	JMP	AX  // 跳到runtime·badmcall执行
+	MOVQ	SI, g(CX)	// g = m->g0  g0赋值给g
+	MOVQ	(g_sched+gobuf_sp)(SI), SP	// sp = m->g0->sched.sp  取出g0.sched.gobuf.sp，设置成当前SP，完成g->g0的栈切换
+	PUSHQ	AX  // 当前g入栈（SP-n），后面作为fn的第一个参数
+	MOVQ	DI, DX  // caller's SP放到DX
+	MOVQ	0(DI), DI  // 0(DI)取出SP+0位置的内容，也就是第一个参数，也就是传入的fn参数放入DI
+	CALL	DI  // 调用fn，参数是0(SP)，也就是前面PUSH进去的g，这个函数应该不返回
+	POPQ	AX  // 取出当前g（SP+n），让SP退回到PUSH前位置
 	MOVQ	$runtime·badmcall2(SB), AX
-	JMP	AX
+	JMP	AX  // 跳到runtime·badmcall2执行
 	RET
 
 // systemstack_switch is a dummy routine that systemstack leaves at the bottom
@@ -329,54 +329,54 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-8
 TEXT runtime·systemstack_switch(SB), NOSPLIT, $0-0
 	RET
 
-// func systemstack(fn func())
+// func systemstack(fn func())  作用是切换到g0栈执行函数，然后又切回到g继续执行
 TEXT runtime·systemstack(SB), NOSPLIT, $0-8
-	MOVQ	fn+0(FP), DI	// DI = fn
+	MOVQ	fn+0(FP), DI	// DI = fn  fn+0(FP)指第一个参数fn的位置，也是当前SP的位置
 	get_tls(CX)
-	MOVQ	g(CX), AX	// AX = g
-	MOVQ	g_m(AX), BX	// BX = m
+	MOVQ	g(CX), AX	// AX = g  g放入AX
+	MOVQ	g_m(AX), BX	// BX = m  g.m放入BX
 
-	CMPQ	AX, m_gsignal(BX)
-	JEQ	noswitch
+	CMPQ	AX, m_gsignal(BX)  // 比较当前g与m.gsignal
+	JEQ	noswitch  // 如果等于，因为gsignal就在m栈，所以当前就在m栈，无需切换。则跳到noswitch处
 
-	MOVQ	m_g0(BX), DX	// DX = g0
-	CMPQ	AX, DX
-	JEQ	noswitch
+	MOVQ	m_g0(BX), DX	// DX = g0  m.g0给DX
+	CMPQ	AX, DX  // 比较g和g0
+	JEQ	noswitch  // 如果相等，也无需切换
 
-	CMPQ	AX, m_curg(BX)
-	JNE	bad
+	CMPQ	AX, m_curg(BX)  // 比较g和m.curg
+	JNE	bad  // 不相等就是异常，跳到bad处
 
 	// switch stacks
 	// save our state in g->sched. Pretend to
 	// be systemstack_switch if the G stack is scanned.
 	MOVQ	$runtime·systemstack_switch(SB), SI
-	MOVQ	SI, (g_sched+gobuf_pc)(AX)
-	MOVQ	SP, (g_sched+gobuf_sp)(AX)
-	MOVQ	AX, (g_sched+gobuf_g)(AX)
-	MOVQ	BP, (g_sched+gobuf_bp)(AX)
+	MOVQ	SI, (g_sched+gobuf_pc)(AX)  // g.sched.gobuf.pc设置为systemstack_switch函数的地址
+	MOVQ	SP, (g_sched+gobuf_sp)(AX)  // 当前SP保存到g.sched.gobuf.sp
+	MOVQ	AX, (g_sched+gobuf_g)(AX)  // 当前g保存到g.sched.gobuf.g
+	MOVQ	BP, (g_sched+gobuf_bp)(AX)  // 当前BP保存到g.sched.gobuf.bp
 
 	// switch to g0
-	MOVQ	DX, g(CX)
-	MOVQ	(g_sched+gobuf_sp)(DX), BX
+	MOVQ	DX, g(CX)  // g = g0
+	MOVQ	(g_sched+gobuf_sp)(DX), BX  // BX = g0.sched.gobuf.sp
 	// make it look like mstart called systemstack on g0, to stop traceback
-	SUBQ	$8, BX
-	MOVQ	$runtime·mstart(SB), DX
-	MOVQ	DX, 0(BX)
-	MOVQ	BX, SP
+	SUBQ	$8, BX  // SP-8放到BX
+	MOVQ	$runtime·mstart(SB), DX  // mstart函数放到DX
+	MOVQ	DX, 0(BX)  // mstart函数放到SP偏移0的位置
+	MOVQ	BX, SP  // 设置SP，这里就切换到了g0栈，并且推入了mstart函数作为第一个参数(其实只是stop traceback的作用)
 
 	// call target function
 	MOVQ	DI, DX
 	MOVQ	0(DI), DI
-	CALL	DI
+	CALL	DI  // 调用fn函数
 
 	// switch back to g
 	get_tls(CX)
-	MOVQ	g(CX), AX
-	MOVQ	g_m(AX), BX
-	MOVQ	m_curg(BX), AX
-	MOVQ	AX, g(CX)
-	MOVQ	(g_sched+gobuf_sp)(AX), SP
-	MOVQ	$0, (g_sched+gobuf_sp)(AX)
+	MOVQ	g(CX), AX  // AX = g
+	MOVQ	g_m(AX), BX  // BX = g.m
+	MOVQ	m_curg(BX), AX  // AX = m.curg
+	MOVQ	AX, g(CX)  // g = m.curg
+	MOVQ	(g_sched+gobuf_sp)(AX), SP  // SP = g.sched.gobug.sp  恢复g栈
+	MOVQ	$0, (g_sched+gobuf_sp)(AX)  // g.sched.gobug.sp = 0
 	RET
 
 noswitch:
@@ -384,8 +384,8 @@ noswitch:
 	// Using a tail call here cleans up tracebacks since we won't stop
 	// at an intermediate systemstack.
 	MOVQ	DI, DX
-	MOVQ	0(DI), DI
-	JMP	DI
+	MOVQ	0(DI), DI  // fn放到DI
+	JMP	DI  // 跳到fn执行
 
 bad:
 	// Bad: g is not gsignal, not g0, not curg. What is it?

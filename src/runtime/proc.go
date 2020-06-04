@@ -301,7 +301,7 @@ func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason w
 	mp.waittraceskip = traceskip
 	releasem(mp)
 	// can't do anything that might move the G between Ms here.
-	mcall(park_m)
+	mcall(park_m)  // 切换到g0栈执行park_m函数
 }
 
 // Puts the current goroutine into a waiting state and unlocks the lock.

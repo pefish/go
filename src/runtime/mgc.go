@@ -1088,7 +1088,7 @@ func GC() {
 	// Wait until the current sweep termination, mark, and mark
 	// termination complete.
 	n := atomic.Load(&work.cycles)
-	gcWaitOnMark(n)
+	gcWaitOnMark(n)  // 这里应该会一直阻塞，没搞懂
 
 	// We're now in sweep N or later. Trigger GC cycle N+1, which
 	// will first finish sweep N if necessary and then enter sweep
@@ -1153,7 +1153,7 @@ func gcWaitOnMark(n uint32) {
 		// Wait until sweep termination, mark, and mark
 		// termination of cycle N complete.
 		work.sweepWaiters.list.push(getg())
-		goparkunlock(&work.sweepWaiters.lock, waitReasonWaitForGCCycle, traceEvGoBlock, 1)
+		goparkunlock(&work.sweepWaiters.lock, waitReasonWaitForGCCycle, traceEvGoBlock, 1)  // 暂停当前g，切换到当前m的g0调度器执行调度
 	}
 }
 
