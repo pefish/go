@@ -566,7 +566,7 @@ CALLFN(·call1073741824, 1073741824)
 TEXT runtime·procyield(SB),NOSPLIT,$0-0
 	MOVL	cycles+0(FP), AX
 again:
-	PAUSE
+	PAUSE  // 让cpu睡眠30个（about）clock
 	SUBL	$1, AX
 	JNZ	again
 	RET

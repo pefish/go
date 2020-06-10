@@ -67,7 +67,7 @@ func bgsweep(c chan int) {
 	lock(&sweep.lock)
 	sweep.parked = true
 	c <- 1
-	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)  // 先停下来，等待goready(sweep.g)激活
 
 	for {
 		for sweepone() != ^uintptr(0) { // 一个个span擦除，直到找不到可以擦除的span才跳出循环

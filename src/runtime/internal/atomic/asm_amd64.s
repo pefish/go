@@ -82,13 +82,13 @@ TEXT runtime∕internal∕atomic·Casp1(SB), NOSPLIT, $0-25
 //	*val += delta;
 //	return *val;
 TEXT runtime∕internal∕atomic·Xadd(SB), NOSPLIT, $0-20
-	MOVQ	ptr+0(FP), BX
-	MOVL	delta+8(FP), AX
-	MOVL	AX, CX
-	LOCK
-	XADDL	AX, 0(BX)
-	ADDL	CX, AX
-	MOVL	AX, ret+16(FP)
+	MOVQ	ptr+0(FP), BX  // 第一个参数放到BX，是个指针
+	MOVL	delta+8(FP), AX  // 第二个参数放到AX
+	MOVL	AX, CX  // 第二个参数又放到CX
+	LOCK  // 锁总线，多CPU排他执行指令。下一个指令将被锁住，执行完自动释放（CPU特性）
+	XADDL	AX, 0(BX)  // 交换并相加。指针中的值与AX的值交换，然后两者相加，结果放到指针指向的值中
+	ADDL	CX, AX  // 指针中原来的值加上第二个参数，结果放入AX
+	MOVL	AX, ret+16(FP)  // 返回AX
 	RET
 
 TEXT runtime∕internal∕atomic·Xadd64(SB), NOSPLIT, $0-24

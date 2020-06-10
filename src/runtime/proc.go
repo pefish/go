@@ -127,11 +127,11 @@ func main() {
 	}
 
 	// Allow newproc to start new Ms.
-	mainStarted = true
+	mainStarted = true  // mainStarted设置为true，新的m才会被创建（查看newproc1函数）
 
 	if GOARCH != "wasm" { // no threads on wasm yet, so no sysmon
 		systemstack(func() {
-			newm(sysmon, nil)
+			newm(sysmon, nil)  // 新启动一个m，指定m的启动函数为sysmon，没有p
 		})
 	}
 
@@ -141,13 +141,13 @@ func main() {
 	// Those can arrange for main.main to run in the main thread
 	// by calling runtime.LockOSThread during initialization
 	// to preserve the lock.
-	lockOSThread()
+	lockOSThread()  // 将当前g绑死在当前m，即m0上
 
-	if g.m != &m0 {
+	if g.m != &m0 {  // runtime.main函数必然是运行在m0上的
 		throw("runtime.main not on m0")
 	}
 
-	doInit(&runtime_inittask) // must be before defer
+	doInit(&runtime_inittask) // must be before defer  执行各个package下面的init函数
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
 	}
@@ -156,14 +156,14 @@ func main() {
 	needUnlock := true
 	defer func() {
 		if needUnlock {
-			unlockOSThread()
+			unlockOSThread()  // 本函数结束如果需要就解除对m0的独占，使m0可以处理其他g了
 		}
 	}()
 
 	// Record when the world started.
 	runtimeInitTime = nanotime()
 
-	gcenable()
+	gcenable()  // 启动两个g进行gc
 
 	main_init_done = make(chan bool)
 	if iscgo {
@@ -192,15 +192,15 @@ func main() {
 	close(main_init_done)
 
 	needUnlock = false
-	unlockOSThread()
+	unlockOSThread()  // 现在就解除独占
 
-	if isarchive || islibrary {
+	if isarchive || islibrary {  // 如果使使用-buildmode=c-archive or c-shared编译出来的，那么直接返回
 		// A program compiled with -buildmode=c-archive or c-shared
 		// has a main, but it is not executed.
 		return
 	}
-	fn := main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
-	fn()
+	fn := main_main // main_main会被编译器翻译成我们写的main.main入口函数
+	fn()  // 执行入口函数，可能启动了更多的g，其中的g可能被另一个m执行。一般情况下，这里开发人员应该自行阻塞
 	if raceenabled {
 		racefini()
 	}
@@ -218,11 +218,11 @@ func main() {
 			Gosched()
 		}
 	}
-	if atomic.Load(&panicking) != 0 {
-		gopark(nil, nil, waitReasonPanicWait, traceEvGoStop, 1)
+	if atomic.Load(&panicking) != 0 {  // panicking在调用panic函数时会增加然后减少, panicking可以阻止进程退出（main函数中启动了其他的g，这个g在新的m上运行然后panic了，这里就有可能成立）
+		gopark(nil, nil, waitReasonPanicWait, traceEvGoStop, 1)  // 将当前g设置为等待状态，并调用schedual调度函数
 	}
 
-	exit(0)
+	exit(0)  // 直接退出进程，其他的g都将结束，不管其是否正在运行
 	for {
 		var x *int32
 		*x = 0
@@ -250,7 +250,7 @@ func forcegchelper() {
 			throw("forcegc: phase error")
 		}
 		atomic.Store(&forcegc.idle, 1)
-		goparkunlock(&forcegc.lock, waitReasonForceGGIdle, traceEvGoBlock, 1)
+		goparkunlock(&forcegc.lock, waitReasonForceGGIdle, traceEvGoBlock, 1)  // 进入等待，等待sysmon唤醒
 		// this goroutine is explicitly resumed by sysmon
 		if debug.gctrace > 0 {
 			println("GC forced")
@@ -310,7 +310,7 @@ func goparkunlock(lock *mutex, reason waitReason, traceEv byte, traceskip int) {
 	gopark(parkunlock_c, unsafe.Pointer(lock), reason, traceEv, traceskip)
 }
 
-func goready(gp *g, traceskip int) {
+func goready(gp *g, traceskip int) {  // 设置为当前m的p的下一个运行的g
 	systemstack(func() {
 		ready(gp, traceskip, true)
 	})
@@ -655,7 +655,7 @@ func fastrandinit() {
 }
 
 // Mark gp ready to run.
-func ready(gp *g, traceskip int, next bool) {  // _Gwaiting改成_Grunnable，且放入队列，让g变得可被调度
+func ready(gp *g, traceskip int, next bool) {  // _Gwaiting改成_Grunnable，且放入当前m的p的本地队列，让g变得可被调度。next为true的话，放到p的下一个运行的g中
 	if trace.enabled {
 		traceGoUnpark(gp, traceskip)
 	}
@@ -672,9 +672,9 @@ func ready(gp *g, traceskip int, next bool) {  // _Gwaiting改成_Grunnable，�
 
 	// status is Gwaiting or Gscanwaiting, make Grunnable and put on runq
 	casgstatus(gp, _Gwaiting, _Grunnable)
-	runqput(_g_.m.p.ptr(), gp, next)  // 放到全局runnable队列
-	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
-		wakep()
+	runqput(_g_.m.p.ptr(), gp, next)  // 放到p的runnable本地队列
+	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {  // 如果有空闲p，没有空闲m
+		wakep()  // 启动新m
 	}
 	releasem(mp)
 }
@@ -2431,8 +2431,8 @@ func injectglist(glist *gList) {
 	var n int
 	for n = 0; !glist.empty(); n++ {
 		gp := glist.pop()
-		casgstatus(gp, _Gwaiting, _Grunnable)
-		globrunqput(gp)
+		casgstatus(gp, _Gwaiting, _Grunnable)  // 变成可运行
+		globrunqput(gp)  // 放入全局队列
 	}
 	unlock(&sched.lock)
 	for ; n != 0 && sched.npidle != 0; n-- {
@@ -2498,7 +2498,7 @@ top:
 		}
 	}
 	if gp == nil && gcBlackenEnabled != 0 {
-		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())  // 找到一个可运行的垃圾回收g
+		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())  // 找到p下面唯一的一个执行标记任务的g，没有就返回nil。这里就实现了多个p的并发标记
 		tryWakeP = tryWakeP || gp != nil
 	}
 	if gp == nil {
@@ -4447,7 +4447,7 @@ func checkdead() {
 // is forced to run.
 //
 // This is a variable for testing purposes. It normally doesn't change.
-var forcegcperiod int64 = 2 * 60 * 1e9
+var forcegcperiod int64 = 2 * 60 * 1e9  // 两分钟
 
 // Always runs without a P, so write barriers are not allowed.
 //
@@ -4461,7 +4461,7 @@ func sysmon() {
 	lasttrace := int64(0)
 	idle := 0 // how many cycles in succession we had not wokeup somebody
 	delay := uint32(0)
-	for {
+	for {  // 死循环
 		if idle == 0 { // start with 20us sleep...
 			delay = 20
 		} else if idle > 50 { // start doubling the sleep after 1ms...
@@ -4470,7 +4470,7 @@ func sysmon() {
 		if delay > 10*1000 { // up to 10ms
 			delay = 10 * 1000
 		}
-		usleep(delay)
+		usleep(delay)  // 睡眠
 		now := nanotime()
 		next, _ := timeSleepUntil()
 		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
@@ -4510,9 +4510,9 @@ func sysmon() {
 		}
 		// poll network if not polled for more than 10ms
 		lastpoll := int64(atomic.Load64(&sched.lastpoll))
-		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {
+		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {  // 如果上一次netpoll与现在相隔了10ms以上
 			atomic.Cas64(&sched.lastpoll, uint64(lastpoll), uint64(now))
-			list := netpoll(0) // non-blocking - returns list of goroutines
+			list := netpoll(0) // non-blocking - returns list of goroutines  进行netpoll，取到所有等待运行的g
 			if !list.empty() {
 				// Need to decrement number of idle locked M's
 				// (pretending that one more is running) before injectglist.
@@ -4522,30 +4522,30 @@ func sysmon() {
 				// observes that there is no work to do and no other running M's
 				// and reports deadlock.
 				incidlelocked(-1)
-				injectglist(&list)
+				injectglist(&list)  // 将g全部设置为可运行，并且加入全局可运行队列等待消费
 				incidlelocked(1)
 			}
 		}
-		if next < now {
+		if next < now {  // 如果下一个定时器的触发时间比现在小，说明定时器没有m消费
 			// There are timers that should have already run,
 			// perhaps because there is an unpreemptible P.
 			// Try to start an M to run them.
-			startm(nil, false)
+			startm(nil, false)  // 尝试来一个m
 		}
 		// retake P's blocked in syscalls
 		// and preempt long running G's
-		if retake(now) != 0 {
+		if retake(now) != 0 {  // 尝试抢占所有正在运行的而且连续运行了超过10ms的p的当前g
 			idle = 0
 		} else {
 			idle++
 		}
 		// check if we need to force a GC
-		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
+		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {  // 如果两分钟没有触发GC任务（test函数中处理的）且forcegc处于空闲
 			lock(&forcegc.lock)
-			forcegc.idle = 0
+			forcegc.idle = 0  // 改成繁忙
 			var list gList
 			list.push(forcegc.g)
-			injectglist(&list)
+			injectglist(&list)  // 将forcegc协程放入可运行队列
 			unlock(&forcegc.lock)
 		}
 		if debug.schedtrace > 0 && lasttrace+int64(debug.schedtrace)*1000000 <= now {
@@ -4574,7 +4574,7 @@ func retake(now int64) uint32 {
 	// We can't use a range loop over allp because we may
 	// temporarily drop the allpLock. Hence, we need to re-fetch
 	// allp each time around the loop.
-	for i := 0; i < len(allp); i++ {
+	for i := 0; i < len(allp); i++ {  // 总共有多少p就循环多少次
 		_p_ := allp[i]
 		if _p_ == nil {
 			// This can happen if procresize has grown
@@ -4583,15 +4583,15 @@ func retake(now int64) uint32 {
 		}
 		pd := &_p_.sysmontick
 		s := _p_.status
-		sysretake := false
-		if s == _Prunning || s == _Psyscall {
+		sysretake := false  // 是否抢占处于系统调用中的g
+		if s == _Prunning || s == _Psyscall {  // 如果p正在运行或者处于系统调用
 			// Preempt G if it's running for too long.
 			t := int64(_p_.schedtick)
 			if int64(pd.schedtick) != t {
 				pd.schedtick = uint32(t)
 				pd.schedwhen = now
-			} else if pd.schedwhen+forcePreemptNS <= now {
-				preemptone(_p_)
+			} else if pd.schedwhen+forcePreemptNS <= now {  // 如果p连续运行时间超过了10ms
+				preemptone(_p_)  // 告诉运行在p上的g停止运行（将g的可抢占标记设置为true，newstack函数被调用（被morestack调用）时触发抢占，那时g会被真正的停止）
 				// In case of syscall, preemptone() doesn't
 				// work, because there is no M wired to P.
 				sysretake = true
@@ -4608,7 +4608,7 @@ func retake(now int64) uint32 {
 			// On the one hand we don't want to retake Ps if there is no other work to do,
 			// but on the other hand we want to retake them eventually
 			// because they can prevent the sysmon thread from deep sleep.
-			if runqempty(_p_) && atomic.Load(&sched.nmspinning)+atomic.Load(&sched.npidle) > 0 && pd.syscallwhen+10*1000*1000 > now {
+			if runqempty(_p_) && atomic.Load(&sched.nmspinning)+atomic.Load(&sched.npidle) > 0 && pd.syscallwhen+10*1000*1000 > now {  // 如果p的运行队列空且（存在自旋的m或p）且系统调用时间不足10ms，则不抢占
 				continue
 			}
 			// Drop allpLock so we can take sched.lock.
@@ -4618,14 +4618,14 @@ func retake(now int64) uint32 {
 			// Otherwise the M from which we retake can exit the syscall,
 			// increment nmidle and report deadlock.
 			incidlelocked(-1)
-			if atomic.Cas(&_p_.status, s, _Pidle) {
+			if atomic.Cas(&_p_.status, s, _Pidle) {  // 将p状态改成空闲
 				if trace.enabled {
 					traceGoSysBlock(_p_)
 					traceProcStop(_p_)
 				}
 				n++
 				_p_.syscalltick++
-				handoffp(_p_)
+				handoffp(_p_) // 将p从m中移走，必要的话会选择一个新m或创建一个m挂钩这个p，然后进入调度
 			}
 			incidlelocked(1)
 			lock(&allpLock)
@@ -5313,10 +5313,10 @@ func sync_runtime_canSpin(i int) bool {
 	// GOMAXPROCS>1 and there is at least one other running P and local runq is empty.
 	// As opposed to runtime mutex we don't do passive spinning here,
 	// because there can be work on global runq or on other Ps.
-	if i >= active_spin || ncpu <= 1 || gomaxprocs <= int32(sched.npidle+sched.nmspinning)+1 {
-		return false
+	if i >= active_spin || ncpu <= 1 || gomaxprocs <= int32(sched.npidle+sched.nmspinning)+1 {  // gomaxprocs <= int32(sched.npidle+sched.nmspinning)+1说明一个其他的正在运行的p都没有
+		return false  // 如果i>=4或者单核或者一个其他的正在运行的p都没有，则返回不能spin
 	}
-	if p := getg().m.p.ptr(); !runqempty(p) {
+	if p := getg().m.p.ptr(); !runqempty(p) {  // 如果当前p的本地队列不为空，则返回不能spin自旋
 		return false
 	}
 	return true

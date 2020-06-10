@@ -1126,7 +1126,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	if shouldhelpgc {
 		if t := (gcTrigger{kind: gcTriggerHeap}); t.test() {
-			gcStart(t)
+			gcStart(t)  // 进行GC
 		}
 	}
 

@@ -714,7 +714,7 @@ func (c *gcControllerState) findRunnableGCWorker(_p_ *p) *g {
 		//
 		// This should be kept in sync with pollFractionalWorkerExit.
 		delta := nanotime() - gcController.markStartTime
-		if delta > 0 && float64(_p_.gcFractionalMarkTime)/float64(delta) > c.fractionalUtilizationGoal {
+		if delta > 0 && float64(_p_.gcFractionalMarkTime)/float64(delta) > c.fractionalUtilizationGoal {  // 如果这个p下的标记任务总标记时间超过了25%，则不标记了
 			// Nope. No need to run a fractional worker.
 			return nil
 		}
@@ -1322,7 +1322,7 @@ func gcStart(trigger gcTrigger) {
 
 	work.cycles++
 
-	gcController.startCycle()
+	gcController.startCycle()  // 开始一个GC周期
 	work.heapGoal = memstats.next_gc
 
 	// In STW mode, disable scheduling of user Gs. This may also
@@ -1924,7 +1924,7 @@ func gcBgMarkWorker(_p_ *p) {  // 标记协程的启动函数
 			throw("work.nwait was > work.nproc")
 		}
 
-		systemstack(func() {
+		systemstack(func() {  // 这里开始从根扫描所有对象并标记
 			// Mark our goroutine preemptible so its stack
 			// can be scanned. This lets two mark workers
 			// scan each other (otherwise, they would

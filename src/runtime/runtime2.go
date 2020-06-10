@@ -162,7 +162,7 @@ type mutex struct {
 	// Futex-based impl treats it as uint32 key,
 	// while sema-based impl as M* waitm.
 	// Used to be a union, but unions break precise GC.
-	key uintptr
+	key uintptr  // 记载mutex的各种属性
 }
 
 // sleep and wakeup on one-time events.
@@ -624,7 +624,7 @@ type p struct {
 
 	// Per-P GC state
 	gcAssistTime         int64    // Nanoseconds in assistAlloc
-	gcFractionalMarkTime int64    // Nanoseconds in fractional mark worker (atomic)
+	gcFractionalMarkTime int64    // Nanoseconds in fractional mark worker (atomic)  p下标记任务一个周期下的总标记时长
 	gcBgMarkWorker       guintptr // (atomic)
 	gcMarkWorkerMode     gcMarkWorkerMode
 

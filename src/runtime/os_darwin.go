@@ -33,7 +33,7 @@ func semacreate(mp *m) {
 }
 
 //go:nosplit
-func semasleep(ns int64) int32 {
+func semasleep(ns int64) int32 {  // 使当前m睡眠
 	var start int64
 	if ns >= 0 {
 		start = nanotime()
@@ -66,7 +66,7 @@ func semasleep(ns int64) int32 {
 }
 
 //go:nosplit
-func semawakeup(mp *m) {
+func semawakeup(mp *m) {  // 唤醒睡眠的m
 	pthread_mutex_lock(&mp.mutex)
 	mp.count++
 	if mp.count > 0 {

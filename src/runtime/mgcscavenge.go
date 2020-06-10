@@ -234,7 +234,7 @@ func bgscavenge(c chan int) {
 	}
 
 	c <- 1
-	goparkunlock(&scavenge.lock, waitReasonGCScavengeWait, traceEvGoBlock, 1)
+	goparkunlock(&scavenge.lock, waitReasonGCScavengeWait, traceEvGoBlock, 1)  // 先停下来，等待goready(scavenge.g)激活
 
 	// Exponentially-weighted moving average of the fraction of time this
 	// goroutine spends scavenging (that is, percent of a single CPU).

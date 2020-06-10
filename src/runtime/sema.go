@@ -25,7 +25,7 @@ import (
 	"unsafe"
 )
 
-// Asynchronous semaphore for sync.Mutex.
+// Asynchronous semaphore for sync.Mutex.  这是针对g的信号锁，而lock_sema.go是针对m的信号锁
 
 // A semaRoot holds a balanced tree of sudog with distinct addresses (s.elem).
 // Each of those sudog may in turn point (through s.waitlink) to a list
@@ -91,11 +91,11 @@ const (
 )
 
 // Called from runtime.
-func semacquire(addr *uint32) {
+func semacquire(addr *uint32) {  // 休眠当前g，g放到队列尾部
 	semacquire1(addr, false, 0, 0)
 }
 
-func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
+func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {  // lifo为true的话，当前g直接放到队列头部
 	gp := getg()
 	if gp != gp.m.curg {
 		throw("semacquire not on the G stack")
@@ -129,7 +129,7 @@ func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes i
 		s.acquiretime = t0
 	}
 	for {
-		lock(&root.lock)
+		lock(&root.lock)  // m加锁，防止其他m重入
 		// Add ourselves to nwait to disable "easy case" in semrelease.
 		atomic.Xadd(&root.nwait, 1)
 		// Check cansemacquire to avoid missed wakeup.
@@ -141,7 +141,7 @@ func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes i
 		// Any semrelease after the cansemacquire knows we're waiting
 		// (we set nwait above), so go to sleep.
 		root.queue(addr, s, lifo)
-		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4+skipframes)
+		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4+skipframes)  // 阻塞在这里，当前g切换成waiting，m切换到g0，释放锁然后进入调度
 		if s.ticket != 0 || cansemacquire(addr) {
 			break
 		}
@@ -152,7 +152,7 @@ func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes i
 	releaseSudog(s)
 }
 
-func semrelease(addr *uint32) {
+func semrelease(addr *uint32) {  // 唤醒队列头部的m
 	semrelease1(addr, false, 0)
 }
 
@@ -168,18 +168,18 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 	}
 
 	// Harder case: search for a waiter and wake it.
-	lock(&root.lock)
+	lock(&root.lock)  // m抢锁
 	if atomic.Load(&root.nwait) == 0 {
 		// The count is already consumed by another goroutine,
 		// so no need to wake up another goroutine.
 		unlock(&root.lock)
 		return
 	}
-	s, t0 := root.dequeue(addr)
+	s, t0 := root.dequeue(addr)  // 找出addr位置的元素
 	if s != nil {
 		atomic.Xadd(&root.nwait, -1)
 	}
-	unlock(&root.lock)
+	unlock(&root.lock)  // m释放锁
 	if s != nil { // May be slow or even yield, so unlock first
 		acquiretime := s.acquiretime
 		if acquiretime != 0 {
@@ -191,7 +191,7 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 		if handoff && cansemacquire(addr) {
 			s.ticket = 1
 		}
-		readyWithTime(s, 5+skipframes)
+		readyWithTime(s, 5+skipframes)  // 调用goready，唤醒s.g，s.g被放到当前m的p的下一个运行的g中，在调度后s.g立马接着执行
 		if s.ticket == 1 && getg().m.locks == 0 {
 			// Direct G handoff
 			// readyWithTime has added the waiter G as runnext in the
@@ -209,7 +209,7 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 			// regime, and then we start to do direct handoffs of ticket and
 			// P.
 			// See issue 33747 for discussion.
-			goyield()
+			goyield()  // 立马进入调度，不等待当前p调度。s.g立马得到执行
 		}
 	}
 }

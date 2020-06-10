@@ -23,7 +23,7 @@ import (
 //
 //	func semawakeup(mp *m)
 //		Wake up mp, which is or will soon be sleeping on its semaphore.
-//
+//  这是针对m的锁，而sema.go是针对g的锁
 const (
 	locked uintptr = 1
 
@@ -32,7 +32,7 @@ const (
 	passive_spin    = 1
 )
 
-func lock(l *mutex) {
+func lock(l *mutex) {  // 抢锁
 	gp := getg()
 	if gp.m.locks < 0 {
 		throw("runtime·lock: lock count")
@@ -48,30 +48,30 @@ func lock(l *mutex) {
 	// On uniprocessor's, no point spinning.
 	// On multiprocessors, spin for ACTIVE_SPIN attempts.
 	spin := 0
-	if ncpu > 1 {
+	if ncpu > 1 {  // 如果是多核
 		spin = active_spin
 	}
 Loop:
 	for i := 0; ; i++ {
 		v := atomic.Loaduintptr(&l.key)
-		if v&locked == 0 {
+		if v&locked == 0 {  // 如果锁被释放了
 			// Unlocked. Try to lock.
-			if atomic.Casuintptr(&l.key, v, v|locked) {
+			if atomic.Casuintptr(&l.key, v, v|locked) {  // 上锁成功后退出
 				return
 			}
 			i = 0
 		}
 		if i < spin {
-			procyield(active_spin_cnt)
+			procyield(active_spin_cnt)  // CPU自旋
 		} else if i < spin+passive_spin {
-			osyield()
+			osyield()  // 第5次循环，通过系统调用把线程挂起一段时间
 		} else {
 			// Someone else has it.
 			// l->waitm points to a linked list of M's waiting
 			// for this lock, chained through m->nextwaitm.
 			// Queue this M.
 			for {
-				gp.m.nextwaitm = muintptr(v &^ locked)
+				gp.m.nextwaitm = muintptr(v &^ locked)  // 当前m放入等待队列尾部（就是将当前m的nextwaitm设置为队列尾部的m）
 				if atomic.Casuintptr(&l.key, v, uintptr(unsafe.Pointer(gp.m))|locked) {
 					break
 				}
@@ -80,9 +80,9 @@ Loop:
 					continue Loop
 				}
 			}
-			if v&locked != 0 {
+			if v&locked != 0 {  // 锁被占用
 				// Queued. Wait.
-				semasleep(-1)
+				semasleep(-1)  // 进入睡眠，等待唤醒
 				i = 0
 			}
 		}
@@ -103,10 +103,10 @@ func unlock(l *mutex) {
 		} else {
 			// Other M's are waiting for the lock.
 			// Dequeue an M.
-			mp = muintptr(v &^ locked).ptr()
+			mp = muintptr(v &^ locked).ptr()  // 取出链首的m，也就是第一个优先被唤醒的m
 			if atomic.Casuintptr(&l.key, v, uintptr(mp.nextwaitm)) {
 				// Dequeued an M.  Wake it.
-				semawakeup(mp)
+				semawakeup(mp)  // 唤醒m
 				break
 			}
 		}
