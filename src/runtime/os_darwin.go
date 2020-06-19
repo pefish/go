@@ -176,7 +176,7 @@ func goenvs() {
 
 // May run with m.p==nil, so write barriers are not allowed.
 //go:nowritebarrierrec
-func newosproc(mp *m) {
+func newosproc(mp *m) {  // 创建系统线程
 	stk := unsafe.Pointer(mp.g0.stack.hi)
 	if false {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " id=", mp.id, " ostk=", &mp, "\n")

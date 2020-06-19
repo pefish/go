@@ -76,12 +76,12 @@ func (c *sigctxt) preparePanic(sig uint32, gp *g) {
 // TODO: Remove pushCallSupported once all platforms support it.
 const pushCallSupported = true
 
-func (c *sigctxt) pushCall(targetPC uintptr) {
+func (c *sigctxt) pushCall(targetPC uintptr) {  // 向m中注入一个函数
 	// Make it look like the signaled instruction called target.
-	pc := uintptr(c.rip())
-	sp := uintptr(c.rsp())
-	sp -= sys.PtrSize
-	*(*uintptr)(unsafe.Pointer(sp)) = pc
-	c.set_rsp(uint64(sp))
-	c.set_rip(uint64(targetPC))
+	pc := uintptr(c.rip())  // 取出当前执行位置
+	sp := uintptr(c.rsp())  // 取出栈顶
+	sp -= sys.PtrSize  // 栈帧扩大一个指针大小
+	*(*uintptr)(unsafe.Pointer(sp)) = pc  // 执行位置放到栈顶，也就是返回地址
+	c.set_rsp(uint64(sp))  // 设置新的栈帧
+	c.set_rip(uint64(targetPC))  // 设置新的执行位置
 }

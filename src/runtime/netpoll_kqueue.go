@@ -97,7 +97,7 @@ func netpollBreak() {
 // delay < 0: blocks indefinitely
 // delay == 0: does not block, just polls
 // delay > 0: block for up to that many nanoseconds
-func netpoll(delay int64) gList {
+func netpoll(delay int64) gList {  // 从netpoll中读出一堆事件(每个事件中有一个pollDesc结构体，其中有g)，形成一堆g
 	if kq == -1 {
 		return gList{}
 	}
@@ -131,7 +131,7 @@ retry:
 		goto retry
 	}
 	var toRun gList
-	for i := 0; i < int(n); i++ {
+	for i := 0; i < int(n); i++ {  // 每一个事件中的g放到链表中返回
 		ev := &events[i]
 
 		if uintptr(ev.ident) == netpollBreakRd {

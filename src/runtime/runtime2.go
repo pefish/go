@@ -805,10 +805,10 @@ type funcinl struct {
 // Needs to be in sync with
 // ../cmd/compile/internal/gc/reflect.go:/^func.dumptabs.
 type itab struct {
-	inter *interfacetype
-	_type *_type
-	hash  uint32 // copy of _type.hash. Used for type switches.
-	_     [4]byte
+	inter *interfacetype  // 描述了 interface 本身的类型
+	_type *_type  // 描述了 interface 所持有的值的类型
+	hash  uint32 // copy of _type.hash. Used for type switches.  _type.hash用于类型转换
+	_     [4]byte  // 缓存行填充，无具体含义
 	fun   [1]uintptr // variable sized. fun[0]==0 means _type does not implement inter.
 }
 

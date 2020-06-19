@@ -328,7 +328,7 @@ func doSigPreempt(gp *g, ctxt *sigctxt) {
 	// preempt.
 	if wantAsyncPreempt(gp) && isAsyncSafePoint(gp, ctxt.sigpc(), ctxt.sigsp(), ctxt.siglr()) {
 		// Inject a call to asyncPreempt.
-		ctxt.pushCall(funcPC(asyncPreempt))
+		ctxt.pushCall(funcPC(asyncPreempt))  // 向m0中断前的栈帧(可能是是g0也可能不是)中注入asyncPreempt函数，相当于在停止执行的地方加了一行函数调用的代码
 	}
 
 	// Acknowledge the preemption.
@@ -539,9 +539,9 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
-	if sig == sigPreempt {
+	if sig == sigPreempt {  // 如果是抢占信号
 		// Might be a preemption signal.
-		doSigPreempt(gp, c)
+		doSigPreempt(gp, c)  // 处理抢占（向m注入一个函数，m恢复后立马执行这个函数）
 		// Even if this was definitely a preemption signal, it
 		// may have been coalesced with another signal, so we
 		// still let it through to the application.

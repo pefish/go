@@ -296,7 +296,7 @@ func canPreemptM(mp *m) bool {
 // frame and its parent frame conservatively.
 //
 // asyncPreempt is implemented in assembly.
-func asyncPreempt()
+func asyncPreempt()  // 是汇编函数。先把所有寄存器中的值放入栈帧，然后调用asyncPreempt2，接着从栈帧恢复所有寄存器的值
 
 //go:nosplit
 func asyncPreempt2() {

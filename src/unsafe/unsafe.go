@@ -12,7 +12,7 @@ package unsafe
 
 // ArbitraryType is here for the purposes of documentation only and is not actually
 // part of the unsafe package. It represents the type of an arbitrary Go expression.
-type ArbitraryType int
+type ArbitraryType int  // 表示Go中的任意类型，这里只是文档的作用，编译器会做处理(其实编译器会对这个包下的所有方法进行处理)
 
 // Pointer represents a pointer to an arbitrary type. There are four special operations
 // available for type Pointer that are not available for other types:
@@ -185,13 +185,13 @@ type Pointer *ArbitraryType
 // For instance, if x is a slice, Sizeof returns the size of the slice
 // descriptor, not the size of the memory referenced by the slice.
 // The return value of Sizeof is a Go constant.
-func Sizeof(x ArbitraryType) uintptr
+func Sizeof(x ArbitraryType) uintptr  // 返回变量占用的空间大小
 
 // Offsetof returns the offset within the struct of the field represented by x,
 // which must be of the form structValue.field. In other words, it returns the
 // number of bytes between the start of the struct and the start of the field.
 // The return value of Offsetof is a Go constant.
-func Offsetof(x ArbitraryType) uintptr
+func Offsetof(x ArbitraryType) uintptr  // 返回struct中字段在struct的偏移量
 
 // Alignof takes an expression x of any type and returns the required alignment
 // of a hypothetical variable v as if v was declared via var v = x.
@@ -202,4 +202,4 @@ func Offsetof(x ArbitraryType) uintptr
 // of a field of that type within a struct. This case is the same as the
 // value returned by reflect.TypeOf(s.f).FieldAlign().
 // The return value of Alignof is a Go constant.
-func Alignof(x ArbitraryType) uintptr
+func Alignof(x ArbitraryType) uintptr  // 查看变量对齐方式。n一个字节n个字节地对齐，这里就返回n
