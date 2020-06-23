@@ -219,7 +219,7 @@ func main() {
 		}
 	}
 	if atomic.Load(&panicking) != 0 {  // panicking在调用panic函数时会增加然后减少, panicking可以阻止进程退出（main函数中启动了其他的g，这个g在新的m上运行然后panic了，这里就有可能成立）
-		gopark(nil, nil, waitReasonPanicWait, traceEvGoStop, 1)  // 将当前g设置为等待状态，并调用schedual调度函数
+		gopark(nil, nil, waitReasonPanicWait, traceEvGoStop, 1)  // g休眠(将当前g设置为等待状态，并调用schedual调度函数)
 	}
 
 	exit(0)  // 直接退出进程，其他的g都将结束，不管其是否正在运行

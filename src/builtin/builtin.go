@@ -186,12 +186,12 @@ func cap(v Type) int
 //	Channel: The channel's buffer is initialized with the specified
 //	buffer capacity. If zero, or the size is omitted, the channel is
 //	unbuffered.
-func make(t Type, size ...IntegerType) Type
+func make(t Type, size ...IntegerType) Type  // 根据make类型的不同，会被编译器翻译成不用的方法
 
 // The new built-in function allocates memory. The first argument is a type,
 // not a value, and the value returned is a pointer to a newly
 // allocated zero value of that type.
-func new(Type) *Type
+func new(Type) *Type  // 会被编译器翻译成runtime.newobject方法，数据会放在堆中
 
 // The complex built-in function constructs a complex value from two
 // floating-point values. The real and imaginary parts must be of the same

@@ -153,7 +153,7 @@ import (
 // anywhere in the bulk barrier or memmove.
 //
 //go:nosplit
-func typedmemmove(typ *_type, dst, src unsafe.Pointer) {
+func typedmemmove(typ *_type, dst, src unsafe.Pointer) {  // 从src开始的地方开始复制字节到dst的地方，数量是typ的大小
 	if dst == src {
 		return
 	}
