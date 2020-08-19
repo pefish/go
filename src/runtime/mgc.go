@@ -437,7 +437,7 @@ func (c *gcControllerState) startCycle() {
 	c.dedicatedMarkWorkersNeeded = int64(totalUtilizationGoal + 0.5)
 	utilError := float64(c.dedicatedMarkWorkersNeeded)/totalUtilizationGoal - 1
 	const maxUtilError = 0.3
-	if utilError < -maxUtilError || utilError > maxUtilError {
+	if utilError < -maxUtilError || utilError > maxUtilError {  // 调整标记任务能在p下最多执行的时长
 		// Rounding put us more than 30% off our goal. With
 		// gcBackgroundUtilization of 25%, this happens for
 		// GOMAXPROCS<=3 or GOMAXPROCS=6. Enable fractional
@@ -714,7 +714,7 @@ func (c *gcControllerState) findRunnableGCWorker(_p_ *p) *g {
 		//
 		// This should be kept in sync with pollFractionalWorkerExit.
 		delta := nanotime() - gcController.markStartTime
-		if delta > 0 && float64(_p_.gcFractionalMarkTime)/float64(delta) > c.fractionalUtilizationGoal {  // 如果这个p下的标记任务总标记时间超过了25%，则不标记了
+		if delta > 0 && float64(_p_.gcFractionalMarkTime)/float64(delta) > c.fractionalUtilizationGoal {  // 如果这个p下的标记任务总标记时间超过了限制时长，则不标记了。防止gc的事情过多占用计算资源
 			// Nope. No need to run a fractional worker.
 			return nil
 		}

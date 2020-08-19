@@ -284,7 +284,7 @@ func goschedguarded() {
 // It is displayed in stack traces and heap dumps.
 // Reasons should be unique and descriptive.
 // Do not re-use reasons, add new ones.
-func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason waitReason, traceEv byte, traceskip int) {
+func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason waitReason, traceEv byte, traceskip int) {  // unlockf是暂停条件，返回true则暂停，否则不暂停
 	if reason != waitReasonSleep {
 		checkTimeouts() // timeouts may expire while two goroutines keep the scheduler busy
 	}
@@ -1038,8 +1038,8 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 //
 //go:nosplit
 //go:nowritebarrierrec
-func mstart() {
-	_g_ := getg()
+func mstart() {  // 新线程启动后会执行这个方法
+	_g_ := getg()  // 取出g0（前面clone线程时，设置了tls为g0）
 
 	osStack := _g_.stack.lo == 0
 	if osStack {
@@ -1394,7 +1394,7 @@ func allocm(_p_ *p, fn func()) *m {  // 分配一个m的空间，但是不与系
 	if iscgo || GOOS == "solaris" || GOOS == "illumos" || GOOS == "windows" || GOOS == "plan9" || GOOS == "darwin" {
 		mp.g0 = malg(-1)
 	} else {
-		mp.g0 = malg(8192 * sys.StackGuardMultiplier)
+		mp.g0 = malg(8192 * sys.StackGuardMultiplier)  // 创建一个g0并分配g0栈
 	}
 	mp.g0.m = mp
 
@@ -2910,7 +2910,7 @@ func save(pc, sp uintptr) {
 // because tracing can be enabled in the middle of syscall. We don't want the wait to hang.
 //
 //go:nosplit
-func reentersyscall(pc, sp uintptr) {
+func reentersyscall(pc, sp uintptr) { // 基本就是保存g上下文、剥离m上的p
 	_g_ := getg()
 
 	// Disable preemption because during this function g is in Gsyscall status,
@@ -2925,7 +2925,7 @@ func reentersyscall(pc, sp uintptr) {
 	_g_.throwsplit = true
 
 	// Leave SP around for GC and traceback.
-	save(pc, sp)
+	save(pc, sp)  // 保存g的上下文
 	_g_.syscallsp = sp
 	_g_.syscallpc = pc
 	casgstatus(_g_, _Grunning, _Gsyscall)
@@ -2944,7 +2944,7 @@ func reentersyscall(pc, sp uintptr) {
 		save(pc, sp)
 	}
 
-	if atomic.Load(&sched.sysmonwait) != 0 {
+	if atomic.Load(&sched.sysmonwait) != 0 {  // 如果sysmon线程正处于等待状态，则唤醒sysmon
 		systemstack(entersyscall_sysmon)
 		save(pc, sp)
 	}
@@ -2958,11 +2958,11 @@ func reentersyscall(pc, sp uintptr) {
 	_g_.m.syscalltick = _g_.m.p.ptr().syscalltick
 	_g_.sysblocktraced = true
 	_g_.m.mcache = nil
-	pp := _g_.m.p.ptr()
+	pp := _g_.m.p.ptr() // 将p从m中剥离并备份，使p又可以被其他的m附加并执行，防止因为m进入系统调用导致p被搁浅
 	pp.m = 0
 	_g_.m.oldp.set(pp)
 	_g_.m.p = 0
-	atomic.Store(&pp.status, _Psyscall)
+	atomic.Store(&pp.status, _Psyscall)  // p的状态改成系统调用中
 	if sched.gcwaiting != 0 {
 		systemstack(entersyscall_gcwait)
 		save(pc, sp)
@@ -2977,7 +2977,7 @@ func reentersyscall(pc, sp uintptr) {
 //
 //go:nosplit
 //go:linkname entersyscall
-func entersyscall() {
+func entersyscall() {  // 进入系统调用的入口
 	reentersyscall(getcallerpc(), getcallersp())
 }
 
@@ -3080,9 +3080,9 @@ func exitsyscall() {  // 退出系统调用
 	}
 
 	_g_.waitsince = 0
-	oldp := _g_.m.oldp.ptr()
+	oldp := _g_.m.oldp.ptr()  // 把系统调用前的p取出来
 	_g_.m.oldp = 0
-	if exitsyscallfast(oldp) {
+	if exitsyscallfast(oldp) {  // 附加p
 		if _g_.m.mcache == nil {
 			throw("lost mcache")
 		}
@@ -3094,16 +3094,16 @@ func exitsyscall() {  // 退出系统调用
 		// There's a cpu for us, so we can run.
 		_g_.m.p.ptr().syscalltick++
 		// We need to cas the status and scan before resuming...
-		casgstatus(_g_, _Gsyscall, _Grunning)
+		casgstatus(_g_, _Gsyscall, _Grunning)  // 当前g恢复执行状态
 
 		// Garbage collector isn't running (since we are),
 		// so okay to clear syscallsp.
-		_g_.syscallsp = 0
+		_g_.syscallsp = 0  // syscallsp恢复成0
 		_g_.m.locks--
-		if _g_.preempt {
+		if _g_.preempt {  // 如果g被标记成可被抢占，则修改stackguard0值，确保栈检查时触发morestack
 			// restore the preemption request in case we've cleared it in newstack
 			_g_.stackguard0 = stackPreempt
-		} else {
+		} else {  // 否则恢复stackguard0值
 			// otherwise restore the real _StackGuard, we've spoiled it in entersyscall/entersyscallblock
 			_g_.stackguard0 = _g_.stack.lo + _StackGuard
 		}
@@ -3116,7 +3116,7 @@ func exitsyscall() {  // 退出系统调用
 
 		return
 	}
-
+	// 如果这个m没有找到可用的p
 	_g_.sysexitticks = 0
 	if trace.enabled {
 		// Wait till traceGoSysBlock event is emitted.
@@ -3134,7 +3134,7 @@ func exitsyscall() {  // 退出系统调用
 	_g_.m.locks--
 
 	// Call the scheduler.
-	mcall(exitsyscall0)  // 这里会调用g0调度器
+	mcall(exitsyscall0)  // 切换到g0，执行调度，会进入自旋，等待任务
 
 	if _g_.m.mcache == nil {
 		throw("lost mcache")
@@ -3152,7 +3152,7 @@ func exitsyscall() {  // 退出系统调用
 }
 
 //go:nosplit
-func exitsyscallfast(oldp *p) bool {
+func exitsyscallfast(oldp *p) bool {  // 附加系统调用前的p，如果已经被其他m抢走，则附加一个空闲的p，如果没有了空闲的p，则附加失败并返回false
 	_g_ := getg()
 
 	// Freezetheworld sets stopwait but does not retake P's.
@@ -3161,18 +3161,18 @@ func exitsyscallfast(oldp *p) bool {
 	}
 
 	// Try to re-acquire the last P.
-	if oldp != nil && oldp.status == _Psyscall && atomic.Cas(&oldp.status, _Psyscall, _Pidle) {
+	if oldp != nil && oldp.status == _Psyscall && atomic.Cas(&oldp.status, _Psyscall, _Pidle) {  // 如果系统调用前的p还是处于系统调用状态，说明这个p没有被其他m抢走，则p变成空闲d等待m附加的状态
 		// There's a cpu for us, so we can run.
-		wirep(oldp)
+		wirep(oldp)  // 附加系统调用前的p
 		exitsyscallfast_reacquired()
 		return true
 	}
 
 	// Try to get any other idle P.
-	if sched.pidle != 0 {
+	if sched.pidle != 0 {  // 如果存在空闲状态的p
 		var ok bool
-		systemstack(func() {
-			ok = exitsyscallfast_pidle()
+		systemstack(func() {  // 进入系统调用的可能不是g0，所以这里要使用systemstack
+			ok = exitsyscallfast_pidle()  // 获取一个空闲的p并附加上
 			if ok && trace.enabled {
 				if oldp != nil {
 					// Wait till traceGoSysBlock event is emitted.
@@ -4477,7 +4477,7 @@ func sysmon() {
 			lock(&sched.lock)
 			if atomic.Load(&sched.gcwaiting) != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs) {
 				if next > now {
-					atomic.Store(&sched.sysmonwait, 1)
+					atomic.Store(&sched.sysmonwait, 1)  // sysmon状态改成等待中
 					unlock(&sched.lock)
 					// Make wake-up period small enough
 					// for the sampling to be correct.
@@ -4489,15 +4489,15 @@ func sysmon() {
 					if shouldRelax {
 						osRelax(true)
 					}
-					notetsleep(&sched.sysmonnote, sleep)
+					notetsleep(&sched.sysmonnote, sleep)  // 睡眠等待sleep时间
 					if shouldRelax {
 						osRelax(false)
 					}
 					now = nanotime()
 					next, _ = timeSleepUntil()
 					lock(&sched.lock)
-					atomic.Store(&sched.sysmonwait, 0)
-					noteclear(&sched.sysmonnote)
+					atomic.Store(&sched.sysmonwait, 0)  // 回复sysmon状态
+					noteclear(&sched.sysmonnote)  // 互斥量许可证设置为0
 				}
 				idle = 0
 				delay = 20

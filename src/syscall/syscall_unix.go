@@ -25,7 +25,7 @@ const (
 	netbsd32Bit = runtime.GOOS == "netbsd" && sizeofPtr == 4
 )
 
-func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)  // 执行系统调用。不同的操作系统系统调用不太一样。比如Windows使用中断号0x2e，而Linux使用0x80
 func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
 func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
 func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)

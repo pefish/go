@@ -321,7 +321,7 @@ func stackcache_clear(c *mcache) {
 // resources and must not split the stack.
 //
 //go:systemstack
-func stackalloc(n uint32) stack {
+func stackalloc(n uint32) stack {  // 分配一个栈空间。要么从栈缓存中拿，要么从堆中申请
 	// Stackalloc must be called on scheduler stack, so that we
 	// never try to grow the stack during the code that stackalloc runs.
 	// Doing so would cause a deadlock (issue 1547).

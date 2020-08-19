@@ -149,7 +149,7 @@ func (b *B) ResetTimer() {
 		// Pre-size it to make more allocation unlikely.
 		b.extra = make(map[string]float64, 16)
 	} else {
-		for k := range b.extra {
+		for k := range b.extra {  // 删除所有统计数据
 			delete(b.extra, k)
 		}
 	}
@@ -176,18 +176,18 @@ func (b *B) ReportAllocs() {
 }
 
 // runN runs a single benchmark for the specified number of iterations.
-func (b *B) runN(n int) {
+func (b *B) runN(n int) {  // 运行一个benchmark
 	benchmarkLock.Lock()
 	defer benchmarkLock.Unlock()
-	defer b.runCleanup(normalPanic)
+	defer b.runCleanup(normalPanic)  // 结束执行自定义的清理函数。比如数据库连接的释放
 	// Try to get a comparable environment for each run
 	// by clearing garbage from previous runs.
 	runtime.GC()
 	b.raceErrors = -race.Errors()
-	b.N = n
+	b.N = n  // b.N设置为计算出的n
 	b.parallelism = 1
 	b.ResetTimer()
-	b.StartTimer()
+	b.StartTimer()  // 开始计时
 	b.benchFunc(b)
 	b.StopTimer()
 	b.previousN = n
@@ -292,7 +292,7 @@ func (b *B) launch() {
 	// Run the benchmark for at least the specified amount of time.
 	if b.benchTime.n > 0 {
 		b.runN(b.benchTime.n)
-	} else {
+	} else {  // 边运行边预测还要不要使用更大的n重来一遍，每次重来会丢弃上一次的统计
 		d := b.benchTime.d
 		for n := int64(1); !b.failed && b.duration < d && n < 1e9; {
 			last := n
@@ -318,7 +318,7 @@ func (b *B) launch() {
 			n = max(n, last+1)
 			// Don't run more than 1e9 times. (This also keeps n in int range on 32 bit platforms.)
 			n = min(n, 1e9)
-			b.runN(int(n))
+			b.runN(int(n))  // 试运行
 		}
 	}
 	b.result = BenchmarkResult{b.N, b.duration, b.bytes, b.netAllocs, b.netBytes, b.extra}
@@ -772,7 +772,7 @@ func (b *B) RunParallel(body func(*PB)) {
 // SetParallelism sets the number of goroutines used by RunParallel to p*GOMAXPROCS.
 // There is usually no need to call SetParallelism for CPU-bound benchmarks.
 // If p is less than 1, this call will have no effect.
-func (b *B) SetParallelism(p int) {
+func (b *B) SetParallelism(p int) {  // 设置并发测试时并发度。开启的g的个数将是 p*GOMAXPROCS
 	if p >= 1 {
 		b.parallelism = p
 	}

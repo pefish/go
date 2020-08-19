@@ -13,8 +13,8 @@ func nonblockingPipe() (r, w int32, errno int32) {
 		if errno != 0 {
 			return -1, -1, errno
 		}
-		closeonexec(r)
-		setNonblock(r)
+		closeonexec(r)  // 设置_O_CLOEXEC标志
+		setNonblock(r)  // 设置_O_NONBLOCK标志
 		closeonexec(w)
 		setNonblock(w)
 	}

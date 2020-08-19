@@ -15,13 +15,13 @@
 // func Syscall6(trap int64, a1, a2, a3, a4, a5, a6 int64) (r1, r2, err int64)
 // Trap # in AX, args in DI SI DX, return in AX DX
 
-TEXT	·Syscall(SB),NOSPLIT,$0-56
+TEXT ·Syscall(SB),NOSPLIT,$0-56  // 执行系统调用
 	CALL	runtime·entersyscall(SB)
-	MOVQ	trap+0(FP), AX	// syscall entry
+	MOVQ	trap+0(FP), AX	// syscall entry  系统调用号
 	MOVQ	a1+8(FP), DI
 	MOVQ	a2+16(FP), SI
 	MOVQ	a3+24(FP), DX
-	SYSCALL
+	SYSCALL  // 就是发出80软中断
 	JCC	ok
 	MOVQ	$-1, r1+32(FP)	// r1
 	MOVQ	$0, r2+40(FP)	// r2

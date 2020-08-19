@@ -162,7 +162,7 @@ func newFile(fd uintptr, name string, kind newFileKind) *File {
 	} else if pollable {
 		// We successfully registered with netpoll, so put
 		// the file into nonblocking mode.
-		if err := syscall.SetNonblock(fdi, true); err == nil {
+		if err := syscall.SetNonblock(fdi, true); err == nil {  // 设置文件socket为非阻塞模式
 			f.nonblock = true
 		}
 	}
@@ -278,7 +278,7 @@ func (f *File) pread(b []byte, off int64) (n int, err error) {
 // It returns the number of bytes written and an error, if any.
 func (f *File) write(b []byte) (n int, err error) {
 	n, err = f.pfd.Write(b)
-	runtime.KeepAlive(f)
+	runtime.KeepAlive(f)  // 确保f可达，不会被回收
 	return n, err
 }
 

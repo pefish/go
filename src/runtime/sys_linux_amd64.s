@@ -569,11 +569,11 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	RET
 
 // int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
-TEXT runtime·clone(SB),NOSPLIT,$0
-	MOVL	flags+0(FP), DI
-	MOVQ	stk+8(FP), SI
-	MOVQ	$0, DX
-	MOVQ	$0, R10
+TEXT runtime·clone(SB),NOSPLIT,$0  // 创建新线程的汇编函数。
+	MOVL	flags+0(FP), DI  // 放入clone第一个参数
+	MOVQ	stk+8(FP), SI  // 栈参数放入SI，作为clone第二个参数
+	MOVQ	$0, DX  // 放入clone第三个参数
+	MOVQ	$0, R10  // 放入clone第四个参数
 
 	// Copy mp, gp, fn off parent stack for use by child.
 	// Careful: Linux system call clobbers CX and R11.
@@ -581,47 +581,47 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	MOVQ	gp+24(FP), R9
 	MOVQ	fn+32(FP), R12
 
-	MOVL	$SYS_clone, AX
-	SYSCALL
+	MOVL	$SYS_clone, AX  // clone的系统调用编号存入AX
+	SYSCALL   // 系统调用原生的clone(clone_flags: usize, newsp: usize, parent_tidptr: usize, child_tidptr: usize)，不使用glibc的wrapper，结果放入AX。结束后新老线程同时执行下一行
 
 	// In parent, return.
-	CMPQ	AX, $0
+	CMPQ	AX, $0  // 线程之间不共享寄存器，父线程以及子线程的所有寄存器的内容一样，除了AX，子线程的AX是0，父线程的AX不是0。clone的返回值如果不是0，则这个线程是父线程，否则是子线程
 	JEQ	3(PC)
 	MOVL	AX, ret+40(FP)
-	RET
+	RET  // 父线程直接返回
 
-	// In child, on new stack.
-	MOVQ	SI, SP
+	// In child, on new stack. 子线程执行这里
+	MOVQ	SI, SP  // 设置栈顶，就是给新线程的g安排新栈
 
 	// If g or m are nil, skip Go-related setup.
-	CMPQ	R8, $0    // m
+	CMPQ	R8, $0    // m  // 检查传递过来的m参数是否为空
 	JEQ	nog
-	CMPQ	R9, $0    // g
+	CMPQ	R9, $0    // g  // 检查传递过来的g参数是否为空
 	JEQ	nog
 
 	// Initialize m->procid to Linux tid
 	MOVL	$SYS_gettid, AX
-	SYSCALL
-	MOVQ	AX, m_procid(R8)
+	SYSCALL  // 系统调用gettid，结果放入AX
+	MOVQ	AX, m_procid(R8)  // tid赋值给m->procid
 
 	// Set FS to point at m->tls.
-	LEAQ	m_tls(R8), DI
-	CALL	runtime·settls(SB)
+	LEAQ	m_tls(R8), DI  // m.tls放入DI
+	CALL	runtime·settls(SB)  // 设置FS寄存器，tls中还没有内容
 
 	// In child, set up new stack
 	get_tls(CX)
-	MOVQ	R8, g_m(R9)
-	MOVQ	R9, g(CX)
-	CALL	runtime·stackcheck(SB)
+	MOVQ	R8, g_m(R9)  // 参数m赋值给g.m
+	MOVQ	R9, g(CX)  // 参数g（传递过来的就是g0）赋值给tls，tls这时有内容了，后面紧接着mstart通过getg()取到的就是g0
+	CALL	runtime·stackcheck(SB)  // 检查前面安排的新栈是不是处于g的栈范围内
 
 nog:
 	// Call fn
-	CALL	R12
+	CALL	R12  // 调用传过来的参数fn函数(就是这个线程的执行函数)，阻塞
 
 	// It shouldn't return. If it does, exit that thread.
 	MOVL	$111, DI
 	MOVL	$SYS_exit, AX
-	SYSCALL
+	SYSCALL  // 系统调用exit，退出线程
 	JMP	-3(PC)	// keep exiting
 
 TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
@@ -634,18 +634,18 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 
-// set tls base to DI
+// set tls base to DI  设置FS段寄存器
 TEXT runtime·settls(SB),NOSPLIT,$32
 #ifdef GOOS_android
 	// Android stores the TLS offset in runtime·tls_g.
 	SUBQ	runtime·tls_g(SB), DI
 #else
-	ADDQ	$8, DI	// ELF wants to use -8(FS)
+	ADDQ	$8, DI	// ELF wants to use -8(FS)  TLS的地址加上8，就是线程结构体的地址
 #endif
-	MOVQ	DI, SI
-	MOVQ	$0x1002, DI	// ARCH_SET_FS
+	MOVQ	DI, SI  // 线程结构体的地址放入SI作为系统调用第二个参数，将要设置到FS寄存器
+	MOVQ	$0x1002, DI	// ARCH_SET_FS放入DI作为系统调用参数，arch_prctl就是将第二个参数设置到FS寄存器
 	MOVQ	$SYS_arch_prctl, AX
-	SYSCALL
+	SYSCALL  // 系统调用arch_prctl（int arch_prctl(int code, unsigned long *addr);），参数给的ARCH_SET_FS
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash

@@ -45,7 +45,7 @@ func Xadd64(ptr *uint64, delta int64) uint64
 func Xadduintptr(ptr *uintptr, delta uintptr) uintptr
 
 //go:noescape
-func Xchg(ptr *uint32, new uint32) uint32
+func Xchg(ptr *uint32, new uint32) uint32  // 交换值
 
 //go:noescape
 func Xchg64(ptr *uint64, new uint64) uint64

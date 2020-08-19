@@ -183,7 +183,7 @@ func (m *Mutex) Unlock() {
 	}
 
 	// Fast path: drop lock bit.
-	new := atomic.AddInt32(&m.state, -mutexLocked)  // locked标记位置为0
+	new := atomic.AddInt32(&m.state, -mutexLocked)  // locked标记位置为0。这里是通过减1实现的，配合195行可以防止同一个锁被多次unlock
 	if new != 0 {  // 如果结果是0，说明其他标记都是0，不需要做其他操作了
 		// Outlined slow path to allow inlining the fast path.
 		// To hide unlockSlow during tracing we skip one extra frame when tracing GoUnblock.
@@ -192,7 +192,7 @@ func (m *Mutex) Unlock() {
 }
 
 func (m *Mutex) unlockSlow(new int32) {
-	if (new+mutexLocked)&mutexLocked == 0 {
+	if (new+mutexLocked)&mutexLocked == 0 {  // 配合186行可以防止同一个锁被多次unlock
 		throw("sync: unlock of unlocked mutex")
 	}
 	if new&mutexStarving == 0 {  // 如果Mutex没有处于饥饿模式（有g阻塞时间超过1ms了，mutex就会切换到饥饿模式）

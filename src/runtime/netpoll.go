@@ -57,7 +57,7 @@ const pollBlockSize = 4 * 1024
 // No heap pointers.
 //
 //go:notinheap
-type pollDesc struct {
+type pollDesc struct {  // 这个结构是用来作为epollwait时，操作系统的返回值
 	link *pollDesc // in pollcache, protected by pollcache.lock
 
 	// The lock protects pollOpen, pollSetDeadline, pollUnblock and deadlineimpl operations.
@@ -73,7 +73,7 @@ type pollDesc struct {
 	everr   bool    // marks event scanning error happened
 	user    uint32  // user settable cookie
 	rseq    uintptr // protects from stale read timers
-	rg      uintptr // pdReady, pdWait, G waiting for read or nil
+	rg      uintptr // pdReady, pdWait, G waiting for read or nil  4种取值。pdReady状态、pdWait状态、等待读数据的g、初始状态0
 	rt      timer   // read deadline timer (set if rt.f != nil)
 	rd      int64   // read deadline
 	wseq    uintptr // protects from stale write timers
@@ -129,7 +129,7 @@ func poll_runtime_isPollServerDescriptor(fd uintptr) bool {
 }
 
 //go:linkname poll_runtime_pollOpen internal/poll.runtime_pollOpen
-func poll_runtime_pollOpen(fd uintptr) (*pollDesc, int) {
+func poll_runtime_pollOpen(fd uintptr) (*pollDesc, int) {  // 注册监听事件
 	pd := pollcache.alloc()
 	lock(&pd.lock)
 	if pd.wg != 0 && pd.wg != pdReady {
@@ -200,8 +200,8 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	if GOOS == "solaris" || GOOS == "illumos" || GOOS == "aix" {
 		netpollarm(pd, mode)
 	}
-	for !netpollblock(pd, int32(mode), false) {
-		err = netpollcheckerr(pd, int32(mode))
+	for !netpollblock(pd, int32(mode), false) {  // 一直等待（waitio为true时会暂停g。虽然这里是通过for循环阻塞等待，但一定时间后这个g还是会被sysmon主动抢占的）wait变成ready状态，如果中间变成了0状态，则变成wait状态并返回false
+		err = netpollcheckerr(pd, int32(mode))  // 检查错误（截止时间到了、连接正关闭等）
 		if err != 0 {
 			return err
 		}
@@ -221,7 +221,7 @@ func poll_runtime_pollWaitCanceled(pd *pollDesc, mode int) {
 }
 
 //go:linkname poll_runtime_pollSetDeadline internal/poll.runtime_pollSetDeadline
-func poll_runtime_pollSetDeadline(pd *pollDesc, d int64, mode int) {
+func poll_runtime_pollSetDeadline(pd *pollDesc, d int64, mode int) {  // 设置调度器或者sysmon向操作系统取事件的截止时间。过了d时间还没有取到操作系统的通知，则强制打破取事件的死循环
 	lock(&pd.lock)
 	if pd.closing {
 		unlock(&pd.lock)
@@ -250,7 +250,7 @@ func poll_runtime_pollSetDeadline(pd *pollDesc, d int64, mode int) {
 	}
 	if pd.rt.f == nil {
 		if pd.rd > 0 {
-			pd.rt.f = rtf
+			pd.rt.f = rtf  // 把时间截止后执行的函数赋值给pollDesc的定时器的f字段
 			// Copy current seq into the timer arg.
 			// Timer func will check the seq against current descriptor seq,
 			// if they differ the descriptor was reused or timers were reset.
@@ -415,7 +415,7 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 	// need to recheck error states after setting gpp to WAIT
 	// this is necessary because runtime_pollUnblock/runtime_pollSetDeadline/deadlineimpl
 	// do the opposite: store to closing/rd/wd, membarrier, load of rg/wg
-	if waitio || netpollcheckerr(pd, mode) == 0 {
+	if waitio || netpollcheckerr(pd, mode) == 0 {  // 如果waitio为true，则暂停当前g，并且将g赋值到pollDesc中，调度器或者sysmon通过netpoll取出事件后就会唤醒这个g，然后接着执行
 		gopark(netpollblockcommit, unsafe.Pointer(gpp), waitReasonIOWait, traceEvGoBlockNet, 5)
 	}
 	// be careful to not lose concurrent READY notification
@@ -455,7 +455,7 @@ func netpollunblock(pd *pollDesc, mode int32, ioready bool) *g {
 	}
 }
 
-func netpolldeadlineimpl(pd *pollDesc, seq uintptr, read, write bool) {
+func netpolldeadlineimpl(pd *pollDesc, seq uintptr, read, write bool) {  // 截止时间到达后会执行的方法
 	lock(&pd.lock)
 	// Seq arg is seq when the timer was set.
 	// If it's stale, ignore the timer event.
@@ -473,7 +473,7 @@ func netpolldeadlineimpl(pd *pollDesc, seq uintptr, read, write bool) {
 		if pd.rd <= 0 || pd.rt.f == nil {
 			throw("runtime: inconsistent read deadline")
 		}
-		pd.rd = -1
+		pd.rd = -1  // 截止时间改成-1，那么poll_runtime_pollWait中就会知道超时了然后返回错误
 		atomic.StorepNoWB(unsafe.Pointer(&pd.rt.f), nil) // full memory barrier between store to rd and load of rg in netpollunblock
 		rg = netpollunblock(pd, 'r', false)
 	}
@@ -487,10 +487,10 @@ func netpolldeadlineimpl(pd *pollDesc, seq uintptr, read, write bool) {
 		wg = netpollunblock(pd, 'w', false)
 	}
 	unlock(&pd.lock)
-	if rg != nil {
+	if rg != nil {  // 如果pollDesc中有g正在休眠，则唤醒
 		netpollgoready(rg, 0)
 	}
-	if wg != nil {
+	if wg != nil {  // 如果pollDesc中有g正在休眠，则唤醒
 		netpollgoready(wg, 0)
 	}
 }
@@ -507,7 +507,7 @@ func netpollWriteDeadline(arg interface{}, seq uintptr) {
 	netpolldeadlineimpl(arg.(*pollDesc), seq, false, true)
 }
 
-func (c *pollCache) alloc() *pollDesc {
+func (c *pollCache) alloc() *pollDesc {  // pollCache是一个单链表，分配时取第一个，一个都没有的话就一次性申请多个
 	lock(&c.lock)
 	if c.first == nil {
 		const pdSize = unsafe.Sizeof(pollDesc{})

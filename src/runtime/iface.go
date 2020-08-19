@@ -30,7 +30,7 @@ func itabHashFunc(inter *interfacetype, typ *_type) uintptr {
 	return uintptr(inter.typ.hash ^ typ.hash)
 }
 
-func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {
+func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {  // 查找itab，没找到就新建一个然后插入
 	if len(inter.mhdr) == 0 {
 		throw("internal error - misuse of itab")
 	}
@@ -76,7 +76,7 @@ func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {
 	itabAdd(m)
 	unlock(&itabLock)
 finish:
-	if m.fun[0] != 0 {
+	if m.fun[0] != 0 {  // m.init的时候，如果发现tab._type没有完全实现inter，就会把m.fun[0]设置为0，然后返回丢失的方法名
 		return m
 	}
 	if canfail {
@@ -88,7 +88,7 @@ finish:
 	// The cached result doesn't record which
 	// interface function was missing, so initialize
 	// the itab again to get the missing function name.
-	panic(&TypeAssertionError{concrete: typ, asserted: &inter.typ, missingMethod: m.init()})
+	panic(&TypeAssertionError{concrete: typ, asserted: &inter.typ, missingMethod: m.init()})  // tab._type没有完全实现inter，这里就抱异常
 }
 
 // find finds the given interface/type pair in t.
@@ -440,7 +440,7 @@ func convI2I(inter *interfacetype, i iface) (r iface) {
 	return
 }
 
-func assertI2I(inter *interfacetype, i iface) (r iface) {
+func assertI2I(inter *interfacetype, i iface) (r iface) {  // 第一个参数是目标接口类型，第二个参数源接口
 	tab := i.tab
 	if tab == nil {
 		// explicit conversions require non-nil interface value.
@@ -451,8 +451,8 @@ func assertI2I(inter *interfacetype, i iface) (r iface) {
 		r.data = i.data
 		return
 	}
-	r.tab = getitab(inter, tab._type, false)
-	r.data = i.data
+	r.tab = getitab(inter, tab._type, false)  // 从itabtable数组中找到tab，没有就插入，不允许失败，失败（tab._type没有完全实现inter就会失败）就报错
+	r.data = i.data  // 数据直接指向源接口的数据即可
 	return
 }
 

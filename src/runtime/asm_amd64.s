@@ -95,7 +95,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
-	MOVQ	$runtime·g0(SB), DI
+	MOVQ	$runtime·g0(SB), DI  // 这里往下是使用操作系统给进程分配的栈来填充g0的栈
 	LEAQ	(-64*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard0(DI)
 	MOVQ	BX, g_stackguard1(DI)
@@ -566,7 +566,7 @@ CALLFN(·call1073741824, 1073741824)
 TEXT runtime·procyield(SB),NOSPLIT,$0-0
 	MOVL	cycles+0(FP), AX
 again:
-	PAUSE  // 让cpu睡眠30个（about）clock
+	PAUSE  // PAUSE指令可以提高超线程IA-32处理器的性能。PAUSE指令可以给处理器一个暗示，表示该代码序列是一个spin-wait loop。处理器可以利用这一点来避免访存排序违例，进而避免流水线flush。另外，PAUSE指令会de-pipeline spin-wait loop，使其不会消耗过多的执行资源
 	SUBL	$1, AX
 	JNZ	again
 	RET
@@ -859,7 +859,7 @@ loop:
 	JMP	loop
 
 // check that SP is in range [g->stack.lo, g->stack.hi)
-TEXT runtime·stackcheck(SB), NOSPLIT, $0-0
+TEXT runtime·stackcheck(SB), NOSPLIT, $0-0  // 检查SP的值是否处于g栈中
 	get_tls(CX)
 	MOVQ	g(CX), AX
 	CMPQ	(g_stack+stack_hi)(AX), SP

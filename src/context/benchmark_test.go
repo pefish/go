@@ -7,8 +7,6 @@ package context_test
 import (
 	. "context"
 	"fmt"
-	"runtime"
-	"sync"
 	"testing"
 	"time"
 )
@@ -20,25 +18,25 @@ func BenchmarkCommonParentCancel(b *testing.B) {
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		x := 0
+		//x := 0
 		for pb.Next() {
 			ctx, cancel := WithCancel(shared)
 			if ctx.Value("key").(string) != "value" {
 				b.Fatal("should not be reached")
 			}
-			for i := 0; i < 100; i++ {
-				x /= x + 1
-			}
+			//for i := 0; i < 100; i++ {
+			//	x /= x + 1
+			//}
 			cancel()
-			for i := 0; i < 100; i++ {
-				x /= x + 1
-			}
+			//for i := 0; i < 100; i++ {
+			//	x /= x + 1
+			//}
 		}
 	})
 }
 
 func BenchmarkWithTimeout(b *testing.B) {
-	for concurrency := 40; concurrency <= 4e5; concurrency *= 100 {
+	for concurrency := 40; concurrency <= 4e5; concurrency *= 100 {  // 运行多个子测试，模拟随着Context数量的增多，WithTimeout以及cancel的性能情况
 		name := fmt.Sprintf("concurrency=%d", concurrency)
 		b.Run(name, func(b *testing.B) {
 			benchmarkWithTimeout(b, concurrency)
@@ -47,25 +45,25 @@ func BenchmarkWithTimeout(b *testing.B) {
 }
 
 func benchmarkWithTimeout(b *testing.B, concurrentContexts int) {
-	gomaxprocs := runtime.GOMAXPROCS(0)
-	perPContexts := concurrentContexts / gomaxprocs
+	//gomaxprocs := runtime.GOMAXPROCS(0)
+	//perPContexts := concurrentContexts / gomaxprocs  // 计算出每个
 	root := Background()
 
 	// Generate concurrent contexts.
-	var wg sync.WaitGroup
-	ccf := make([][]CancelFunc, gomaxprocs)
-	for i := range ccf {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			cf := make([]CancelFunc, perPContexts)
-			for j := range cf {
-				_, cf[j] = WithTimeout(root, time.Hour)
-			}
-			ccf[i] = cf
-		}(i)
-	}
-	wg.Wait()
+	//var wg sync.WaitGroup
+	//ccf := make([][]CancelFunc, gomaxprocs)
+	//for i := range ccf {
+	//	wg.Add(1)
+	//	go func(i int) {
+	//		defer wg.Done()
+	//		cf := make([]CancelFunc, perPContexts)
+	//		for j := range cf {
+	//			_, cf[j] = WithTimeout(root, time.Hour)
+	//		}
+	//		ccf[i] = cf
+	//	}(i)
+	//}
+	//wg.Wait()
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -81,11 +79,11 @@ func benchmarkWithTimeout(b *testing.B, concurrentContexts int) {
 	})
 	b.StopTimer()
 
-	for _, cf := range ccf {
-		for _, f := range cf {
-			f()
-		}
-	}
+	//for _, cf := range ccf {
+	//	for _, f := range cf {
+	//		f()
+	//	}
+	//}
 }
 
 func BenchmarkCancelTree(b *testing.B) {

@@ -29,9 +29,9 @@ const (
 // ../reflect/type.go:/^type.rtype.
 // ../internal/reflectlite/type.go:/^type.rtype.
 type _type struct {
-	size       uintptr
-	ptrdata    uintptr // size of memory prefix holding all pointers
-	hash       uint32
+	size       uintptr  // 源数据占用字节的大小。如果是指针类型，这里就是8字节
+	ptrdata    uintptr // 表示源数据使用到的所有指针占用的空间大小(不是占用大小累加，而是最大指针-最小指针)。var interface{} a = &Test{}，源数据是&Test{}，不管Test类型中是否有指针，这里都是8
+	hash       uint32  // 类型的hash
 	tflag      tflag
 	align      uint8
 	fieldAlign uint8

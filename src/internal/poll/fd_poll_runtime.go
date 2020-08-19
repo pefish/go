@@ -21,15 +21,15 @@ func runtimeNano() int64
 func runtime_pollServerInit()
 func runtime_pollOpen(fd uintptr) (uintptr, int)
 func runtime_pollClose(ctx uintptr)
-func runtime_pollWait(ctx uintptr, mode int) int
+func runtime_pollWait(ctx uintptr, mode int) int  // 等待pollDesc成为ready状态
 func runtime_pollWaitCanceled(ctx uintptr, mode int) int
-func runtime_pollReset(ctx uintptr, mode int) int
+func runtime_pollReset(ctx uintptr, mode int) int  // 将pollDesc设置为0的无状态，成功返回0，失败返回错误码
 func runtime_pollSetDeadline(ctx uintptr, d int64, mode int)
 func runtime_pollUnblock(ctx uintptr)
 func runtime_isPollServerDescriptor(fd uintptr) bool
 
 type pollDesc struct {
-	runtimeCtx uintptr
+	runtimeCtx uintptr  // 运行时中的pollDesc结构
 }
 
 var serverInit sync.Once
@@ -76,7 +76,7 @@ func (pd *pollDesc) prepareRead(isFile bool) error {
 	return pd.prepare('r', isFile)
 }
 
-func (pd *pollDesc) prepareWrite(isFile bool) error {
+func (pd *pollDesc) prepareWrite(isFile bool) error {  // 将pollDesc置为准备写的状态
 	return pd.prepare('w', isFile)
 }
 

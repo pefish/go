@@ -57,7 +57,7 @@ func countrunes(s string) int {
 // If the string appears to be incomplete or decoding problems
 // are encountered (runeerror, k + 1) is returned to ensure
 // progress when decoderune is used to iterate over a string.
-func decoderune(s string, k int) (r rune, pos int) {
+func decoderune(s string, k int) (r rune, pos int) {  // range string的时候会翻译成这个方法，第一个参数是迭代的string，第二个参数是index。这个方法的含义就是从k的位置读取一个rune字符，自动判断是2字节字符还是3字节还是4字节字符　
 	pos = k
 
 	if k >= len(s) {

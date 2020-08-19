@@ -21,14 +21,14 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 		throw("concurrent map read and map write")
 	}
 	var b *bmap
-	if h.B == 0 {
+	if h.B == 0 {  // Map只有一个bucket
 		// One-bucket table. No need to hash.
 		b = (*bmap)(h.buckets)
 	} else {
 		hash := t.hasher(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 		m := bucketMask(h.B)
 		b = (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
-		if c := h.oldbuckets; c != nil {
+		if c := h.oldbuckets; c != nil {  // oldbuckets存在的话表示正在扩容
 			if !h.sameSizeGrow() {
 				// There used to be half as many buckets; mask down one more power of two.
 				m >>= 1
@@ -40,9 +40,9 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 		}
 	}
 	for ; b != nil; b = b.overflow(t) {
-		for i, k := uintptr(0), b.keys(); i < bucketCnt; i, k = i+1, add(k, 8) {
+		for i, k := uintptr(0), b.keys(); i < bucketCnt; i, k = i+1, add(k, 8) {  // 遍历bucket，没找到就接着遍历overflow bucket
 			if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.elemsize))
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.elemsize))  // 找到了，返回元素
 			}
 		}
 	}

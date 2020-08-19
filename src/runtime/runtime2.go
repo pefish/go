@@ -114,7 +114,7 @@ const (
 	//
 	// The P is owned by the idle list or by whatever is
 	// transitioning its state. Its run queue is empty.
-	_Pidle = iota
+	_Pidle = iota  // 空闲等待m附加
 
 	// _Prunning means a P is owned by an M and is being used to
 	// run user code or the scheduler. Only the M that owns this P
@@ -135,7 +135,7 @@ const (
 	// an M successfully CASes its original P back to _Prunning
 	// after a syscall, it must understand the P may have been
 	// used by another M in the interim.
-	_Psyscall
+	_Psyscall  // p中当前g进入了系统调用
 
 	// _Pgcstop means a P is halted for STW and owned by the M
 	// that stopped the world. The M that stopped the world
@@ -158,11 +158,11 @@ const (
 // as fast as spin locks (just a few user-level instructions),
 // but on the contention path they sleep in the kernel.
 // A zeroed Mutex is unlocked (no need to initialize each lock).
-type mutex struct {
+type mutex struct {  // 一把锁
 	// Futex-based impl treats it as uint32 key,
 	// while sema-based impl as M* waitm.
 	// Used to be a union, but unions break precise GC.
-	key uintptr  // 记载mutex的各种属性
+	key uintptr  // 锁的信息
 }
 
 // sleep and wakeup on one-time events.
@@ -185,11 +185,11 @@ type mutex struct {
 //
 // notesleep/notetsleep are generally called on g0,
 // notetsleepg is similar to notetsleep but is called on user g.
-type note struct {
+type note struct {  // Go运行时中的互斥量
 	// Futex-based impl treats it as uint32 key,
 	// while sema-based impl as M* waitm.
 	// Used to be a union, but unions break precise GC.
-	key uintptr
+	key uintptr  // 互斥量。linux中使用的是futex机制，其他平台使用的Semaphore机制
 }
 
 type funcval struct {
@@ -197,14 +197,14 @@ type funcval struct {
 	// variable-size, fn-specific data here
 }
 
-type iface struct {
-	tab  *itab
-	data unsafe.Pointer
+type iface struct {  // 非空interface类型实际上是这个类型
+	tab  *itab  // 描述了接口类型信息、源struct的类型信息、接口中定义的方法。如var itest Itest = &Test{}，itest会被翻译成iface struct
+	data unsafe.Pointer  // 指向源struct数据的指针
 }
 
-type eface struct {
-	_type *_type
-	data  unsafe.Pointer
+type eface struct {  // 空interface类型实际上是这个struct
+	_type *_type  // 表示源struct的类型信息。如var bb1 interface{} = &Test{}，bb1会被翻译成eface struct，_type表示Test的类型信息
+	data  unsafe.Pointer  // 指向源struct数据的指针
 }
 
 func efaceOf(ep *interface{}) *eface {
@@ -408,8 +408,8 @@ type g struct {
 	_defer       *_defer // innermost defer
 	m            *m      // current m; offset known to arm liblink
 	sched        gobuf
-	syscallsp    uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc
-	syscallpc    uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc
+	syscallsp    uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc  用于gc。g处于系统调用状态时，这个值被设置成进入系统调用前的sp
+	syscallpc    uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc  同上
 	stktopsp     uintptr        // expected sp at top of stack, to check in traceback
 	param        unsafe.Pointer // passed parameter on wakeup
 	atomicstatus uint32
@@ -491,11 +491,11 @@ type m struct {
 	mallocing     int32
 	throwing      int32
 	preemptoff    string // if != "", keep curg running on this m
-	locks         int32
+	locks         int32  // 表示多少个线程处于等待锁的状态
 	dying         int32
 	profilehz     int32
 	spinning      bool // m is out of work and is actively looking for work
-	blocked       bool // m is blocked on a note
+	blocked       bool // m is blocked on a note  表示m是否因为互斥量而睡眠等待
 	newSigstack   bool // minit on C thread called sigaltstack
 	printlock     int8
 	incgo         bool   // m is executing a cgo call
@@ -554,7 +554,7 @@ type p struct {
 	status      uint32 // one of pidle/prunning/...
 	link        puintptr
 	schedtick   uint32     // incremented on every scheduler call
-	syscalltick uint32     // incremented on every system call
+	syscalltick uint32     // incremented on every system call  记录p中所有g系统调用的次数
 	sysmontick  sysmontick // last tick observed by sysmon
 	m           muintptr   // back-link to associated m (nil if idle)
 	mcache      *mcache
@@ -683,7 +683,7 @@ type schedt struct {
 	lastpoll  uint64 // time of last network poll, 0 if currently polling
 	pollUntil uint64 // time to which current poll is sleeping
 
-	lock mutex
+	lock mutex  // 调度所用的互斥锁
 
 	// When increasing nmidle, nmidlelocked, nmsys, or nmfreed, be
 	// sure to call checkdead().
@@ -698,7 +698,7 @@ type schedt struct {
 
 	ngsys uint32 // number of system goroutines; updated atomically
 
-	pidle      puintptr // idle p's
+	pidle      puintptr // idle p's  记录处于空闲等待附加的p的数量
 	npidle     uint32
 	nmspinning uint32 // See "Worker thread parking/unparking" comment in proc.go.
 
@@ -741,8 +741,8 @@ type schedt struct {
 	gcwaiting  uint32 // gc is waiting to run
 	stopwait   int32
 	stopnote   note
-	sysmonwait uint32
-	sysmonnote note
+	sysmonwait uint32  // 表示sysmon线程是否处于睡眠等待状态
+	sysmonnote note  // 控制sysmon线程睡眠唤醒的互斥量
 
 	// safepointFn should be called on each P at the next GC
 	// safepoint if p.runSafePointFn is set.
@@ -809,7 +809,7 @@ type itab struct {
 	_type *_type  // 描述了 interface 所持有的值的类型
 	hash  uint32 // copy of _type.hash. Used for type switches.  _type.hash用于类型转换
 	_     [4]byte  // 缓存行填充，无具体含义
-	fun   [1]uintptr // variable sized. fun[0]==0 means _type does not implement inter.
+	fun   [1]uintptr // variable sized. fun[0]==0 means _type does not implement inter.  接口中定义的方法集合，这个字段的长度是可变的（编译器处理）,第n个元素指向第n个方法
 }
 
 // Lock-free stack node.

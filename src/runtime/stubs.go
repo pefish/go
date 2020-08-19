@@ -31,7 +31,7 @@ func getg() *g
 // This must NOT be go:noescape: if fn is a stack-allocated closure,
 // fn puts g on a run queue, and g executes before fn returns, the
 // closure will be invalidated while it is still executing.
-func mcall(fn func(*g))
+func mcall(fn func(*g))  // 进入g0栈调用函数。跟systemstack的区别是：mcall只能在非g0栈中被调用
 
 // systemstack runs fn on a system stack.
 // If systemstack is called from the per-OS-thread (g0) stack, or
@@ -51,7 +51,7 @@ func mcall(fn func(*g))
 //	... use x ...
 //
 //go:noescape
-func systemstack(fn func())
+func systemstack(fn func())  // 如果当前处于g0栈，则无需切换，如果不处于g0栈，则切换进入g0栈执行函数
 
 var badsystemstackMsg = "fatal: systemstack called from unexpected goroutine"
 
@@ -234,10 +234,10 @@ func publicationBarrier()
 // immediately and can only be passed to nosplit functions.
 
 //go:noescape
-func getcallerpc() uintptr
+func getcallerpc() uintptr  // 获取caller下一行指令地址。没有具体实现，由编译器翻译成固有指令
 
 //go:noescape
-func getcallersp() uintptr // implemented as an intrinsic on all platforms
+func getcallersp() uintptr // implemented as an intrinsic on all platforms 获取caller的栈顶地址。没有具体实现，由编译器翻译成固有指令
 
 // getclosureptr returns the pointer to the current closure.
 // getclosureptr can only be used in an assignment statement

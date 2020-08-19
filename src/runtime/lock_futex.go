@@ -23,9 +23,9 @@ import (
 //		If any procs are sleeping on addr, wake up at most cnt.
 
 const (
-	mutex_unlocked = 0
-	mutex_locked   = 1
-	mutex_sleeping = 2
+	mutex_unlocked = 0  // mutex锁的状态。锁已被释放
+	mutex_locked   = 1  // mutex锁的状态。锁已被抢占
+	mutex_sleeping = 2  // mutex锁的状态。线程以futex的方式处于睡眠中，需要被唤醒
 
 	active_spin     = 4
 	active_spin_cnt = 30
@@ -43,7 +43,7 @@ func key32(p *uintptr) *uint32 {
 	return (*uint32)(unsafe.Pointer(p))
 }
 
-func lock(l *mutex) {
+func lock(l *mutex) {  // 试图抢锁，没抢到就阻塞
 	gp := getg()
 
 	if gp.m.locks < 0 {
@@ -52,8 +52,8 @@ func lock(l *mutex) {
 	gp.m.locks++
 
 	// Speculative grab for lock.
-	v := atomic.Xchg(key32(&l.key), mutex_locked)
-	if v == mutex_unlocked {
+	v := atomic.Xchg(key32(&l.key), mutex_locked)  // 锁状态变成已被抢走
+	if v == mutex_unlocked {  // 如果原来是解锁状态，则抢锁成功，不进入睡眠等待
 		return
 	}
 
@@ -74,8 +74,8 @@ func lock(l *mutex) {
 	}
 	for {
 		// Try for lock, spinning.
-		for i := 0; i < spin; i++ {
-			for l.key == mutex_unlocked {
+		for i := 0; i < spin; i++ {  // 使用spinning自旋的方式睡眠阻塞
+			for l.key == mutex_unlocked {  // 发现锁被释放了，本线程从阻塞中恢复
 				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
 					return
 				}
@@ -84,8 +84,8 @@ func lock(l *mutex) {
 		}
 
 		// Try for lock, rescheduling.
-		for i := 0; i < passive_spin; i++ {
-			for l.key == mutex_unlocked {
+		for i := 0; i < passive_spin; i++ {  // 使用系统调用sched_yield的方式睡眠阻塞
+			for l.key == mutex_unlocked {  // 发现锁被释放了，本线程从阻塞中恢复
 				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
 					return
 				}
@@ -93,9 +93,9 @@ func lock(l *mutex) {
 			osyield()
 		}
 
-		// Sleep.
-		v = atomic.Xchg(key32(&l.key), mutex_sleeping)
-		if v == mutex_unlocked {
+		// Sleep.  使用futex的方式睡眠阻塞
+		v = atomic.Xchg(key32(&l.key), mutex_sleeping)  // 锁的状态变成"有等待锁的线程处于睡眠中"的状态
+		if v == mutex_unlocked  {
 			return
 		}
 		wait = mutex_sleeping
@@ -104,11 +104,11 @@ func lock(l *mutex) {
 }
 
 func unlock(l *mutex) {
-	v := atomic.Xchg(key32(&l.key), mutex_unlocked)
-	if v == mutex_unlocked {
+	v := atomic.Xchg(key32(&l.key), mutex_unlocked)  // 锁状态变成锁已被释放
+	if v == mutex_unlocked {  // 如果原来就是已被释放状态，说明这个锁被多次释放，不允许的
 		throw("unlock of unlocked lock")
 	}
-	if v == mutex_sleeping {
+	if v == mutex_sleeping {  // 如果原来有等待锁的线程处于睡眠中，则唤醒它
 		futexwakeup(key32(&l.key), 1)
 	}
 
@@ -123,17 +123,17 @@ func unlock(l *mutex) {
 }
 
 // One-time notifications.
-func noteclear(n *note) {
+func noteclear(n *note) {  // 互斥量持有的许可证个数设置为0
 	n.key = 0
 }
 
 func notewakeup(n *note) {
-	old := atomic.Xchg(key32(&n.key), 1)
-	if old != 0 {
+	old := atomic.Xchg(key32(&n.key), 1)  // n.key设置成1归还许可证，返回n.key原来的值
+	if old != 0 {  // 如果原来的值不是0，说明n.key这个互斥量被wakeup了多次
 		print("notewakeup - double wakeup (", old, ")\n")
 		throw("notewakeup - double wakeup")
 	}
-	futexwakeup(key32(&n.key), 1)
+	futexwakeup(key32(&n.key), 1)  // 唤醒1个睡眠中的线程
 }
 
 func notesleep(n *note) {
@@ -146,9 +146,9 @@ func notesleep(n *note) {
 		// Sleep for an arbitrary-but-moderate interval to poll libc interceptors.
 		ns = 10e6
 	}
-	for atomic.Load(key32(&n.key)) == 0 {
+	for atomic.Load(key32(&n.key)) == 0 {  // n.key等于0，表示互斥量已经没有了许可证可以发放，线程要进入睡眠
 		gp.m.blocked = true
-		futexsleep(key32(&n.key), 0, ns)
+		futexsleep(key32(&n.key), 0, ns)  // 睡眠阻塞
 		if *cgo_yield != nil {
 			asmcgocall(*cgo_yield, nil)
 		}

@@ -32,7 +32,7 @@ type FD struct {
 	csema uint32
 
 	// Non-zero if this file has been set to blocking mode.
-	isBlocking uint32
+	isBlocking uint32  // pollable = 1 是非阻塞模式
 
 	// Whether this is a streaming descriptor, as opposed to a
 	// packet-based descriptor like a UDP socket. Immutable.
@@ -139,7 +139,7 @@ func (fd *FD) SetBlocking() error {
 // The same is true of socket implementations on many systems.
 // See golang.org/issue/7812 and golang.org/issue/16266.
 // Use 1GB instead of, say, 2GB-1, to keep subsequent reads aligned.
-const maxRW = 1 << 30
+const maxRW = 1 << 30  // 一次最多只能读写这么多字节,1G
 
 // Read implements io.Reader.
 func (fd *FD) Read(p []byte) (int, error) {
@@ -252,7 +252,7 @@ func (fd *FD) ReadMsg(p []byte, oob []byte) (int, int, int, syscall.Sockaddr, er
 
 // Write implements io.Writer.
 func (fd *FD) Write(p []byte) (int, error) {
-	if err := fd.writeLock(); err != nil {
+	if err := fd.writeLock(); err != nil {  // 加上写锁，防止多个线程同时写文件
 		return 0, err
 	}
 	defer fd.writeUnlock()
@@ -265,15 +265,15 @@ func (fd *FD) Write(p []byte) (int, error) {
 		if fd.IsStream && max-nn > maxRW {
 			max = nn + maxRW
 		}
-		n, err := syscall.Write(fd.Sysfd, p[nn:max])
+		n, err := syscall.Write(fd.Sysfd, p[nn:max])  // 使用write系统调用向socket写入数据。因为前面将socket设置成了非阻塞模式，所以这里即使缓冲区塞满了也不会阻塞，而是收到EAGAIN重试错误
 		if n > 0 {
 			nn += n
 		}
 		if nn == len(p) {
 			return nn, err
 		}
-		if err == syscall.EAGAIN && fd.pd.pollable() {
-			if err = fd.pd.waitWrite(fd.isFile); err == nil {
+		if err == syscall.EAGAIN && fd.pd.pollable() {  // 如果收到了EAGAIN错误且socket是非阻塞模式，说明前面的write失败（比如缓冲区塞满了不可写了）了需要重试,continue就重试了
+			if err = fd.pd.waitWrite(fd.isFile); err == nil {  // 等待ready状态（fd如果可写了，操作系统通过epoll通知，运行时定期拉取事件，就会将pollDesc状态改成ready）
 				continue
 			}
 		}

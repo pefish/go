@@ -12,7 +12,7 @@ import (
 
 type mOS struct{}
 
-//go:noescape
+//go:noescape  futex系统调用。addr是用户态下共享内存的地址，里面存放的是一个对齐的整型计数器；op是FUTEX_WAIT（检查uaddr中计数器的值是否为val,如果是则让进程休眠直到ts超时或FUTEX_WAKE。也就是把进程挂到uaddr相对应的等待队列上去）或者FUTEX_WAKE（唤醒val个等待在uaddr上进程）；
 func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 unsafe.Pointer, val3 uint32) int32
 
 // Linux futex.
@@ -35,7 +35,7 @@ const (
 // Might be woken up spuriously; that's allowed.
 // Don't sleep longer than ns; ns < 0 means forever.
 //go:nosplit
-func futexsleep(addr *uint32, val uint32, ns int64) {
+func futexsleep(addr *uint32, val uint32, ns int64) {  // addr的值等于val的话，线程睡眠直到ns(-1则一直睡眠直到被wakeup)超时
 	// Some Linux kernels have a bug where futex of
 	// FUTEX_WAIT returns an internal error code
 	// as an errno. Libpthread ignores the return value
@@ -53,7 +53,7 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 
 // If any procs are sleeping on addr, wake up at most cnt.
 //go:nosplit
-func futexwakeup(addr *uint32, cnt uint32) {
+func futexwakeup(addr *uint32, cnt uint32) {  // 唤醒cnt个等待者
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
 	if ret >= 0 {
 		return
@@ -138,7 +138,7 @@ func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 // May run with m.p==nil, so write barriers are not allowed.
 //go:nowritebarrier
 func newosproc(mp *m) {
-	stk := unsafe.Pointer(mp.g0.stack.hi)
+	stk := unsafe.Pointer(mp.g0.stack.hi)  // 获取g0栈开始位置，要在创建线程时作为参数传递给操作系统的。就是说线程的栈就是g0的栈，g0的栈就是线程的栈
 	/*
 	 * note: strace gets confused if we use CLONE_PTRACE here.
 	 */
@@ -150,7 +150,7 @@ func newosproc(mp *m) {
 	// with signals disabled. It will enable them in minit.
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
-	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))
+	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))  // 父线程会返回，子线程会阻塞执行mstart
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 
 	if ret < 0 {

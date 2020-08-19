@@ -123,7 +123,7 @@ const (
 
 	concurrentSweep = _ConcurrentSweep
 
-	_PageSize = 1 << _PageShift
+	_PageSize = 1 << _PageShift  // 2的13次方，就是8kb，表示页大小是8kb
 	_PageMask = _PageSize - 1
 
 	// _64bit = 1 on 64-bit systems, 0 on 32-bit systems
@@ -888,7 +888,7 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 // Allocate an object of size bytes.
 // Small objects are allocated from the per-P cache's free lists.
 // Large objects (> 32 kB) are allocated straight from the heap.
-func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {  // 堆中分配内存
+func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {  // 堆中分配内存，needzero表示是否需要清空这块内存
 	if gcphase == _GCmarktermination {
 		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
@@ -955,7 +955,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {  // 堆�
 	dataSize := size
 	c := gomcache()  // 获取当前m的mcache
 	var x unsafe.Pointer
-	noscan := typ == nil || typ.ptrdata == 0
+	noscan := typ == nil || typ.ptrdata == 0  // 如果不是指针，就不用scan
 	if size <= maxSmallSize {  // 如果要分配的内存<=32k
 		if noscan && size < maxTinySize { // 如果是值类型且小于16byte
 			// Tiny allocator.
@@ -1053,7 +1053,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {  // 堆�
 	}
 
 	var scanSize uintptr
-	if !noscan {
+	if !noscan {  // 如果需要扫描标记
 		// If allocating a defer+arg block, now that we've picked a malloc size
 		// large enough to hold everything, cut the "asked for" size down to
 		// just the defer header, so that the GC bitmap will record the arg block

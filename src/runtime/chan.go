@@ -460,7 +460,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 	lock(&c.lock)
 
-	if c.closed != 0 && c.qcount == 0 {  // 如果chan已经被关闭且chan中没有元素
+	if c.closed != 0 && c.qcount == 0 {  // 如果chan已经被关闭且chan中没有元素。如果chan关闭了，但是chan中还有没被接收的数据，则依然能取出
 		if raceenabled {
 			raceacquire(c.raceaddr())
 		}

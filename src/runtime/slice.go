@@ -11,9 +11,9 @@ import (
 )
 
 type slice struct {
-	array unsafe.Pointer
-	len   int
-	cap   int
+	array unsafe.Pointer  // 指向底层数组的指针
+	len   int  // slice的大小
+	cap   int  // slice的容量
 }
 
 // A notInHeapSlice is a slice backed by go:notinheap memory.
@@ -31,9 +31,9 @@ func panicmakeslicecap() {
 	panic(errorString("makeslice: cap out of range"))
 }
 
-func makeslice(et *_type, len, cap int) unsafe.Pointer {
-	mem, overflow := math.MulUintptr(et.size, uintptr(cap))
-	if overflow || mem > maxAlloc || len < 0 || len > cap {
+func makeslice(et *_type, len, cap int) unsafe.Pointer {  // make([]int) 会被翻译成这个函数
+	mem, overflow := math.MulUintptr(et.size, uintptr(cap))  // 判断容量是否太大导致地址溢出
+	if overflow || mem > maxAlloc || len < 0 || len > cap {  // 如果溢出或者需要的内存大于最大能分配内存或大小<0或者大小比容量还大，则panic
 		// NOTE: Produce a 'len out of range' error instead of a
 		// 'cap out of range' error when someone does make([]T, bignumber).
 		// 'cap out of range' is true too, but since the cap is only being
@@ -46,7 +46,7 @@ func makeslice(et *_type, len, cap int) unsafe.Pointer {
 		panicmakeslicecap()
 	}
 
-	return mallocgc(mem, et, true)
+	return mallocgc(mem, et, true)  // 从堆中分配底层数组，返回指向数组开始位置的指针
 }
 
 func makeslice64(et *_type, len64, cap64 int64) unsafe.Pointer {
@@ -73,7 +73,7 @@ func makeslice64(et *_type, len64, cap64 int64) unsafe.Pointer {
 // to calculate where to write new values during an append.
 // TODO: When the old backend is gone, reconsider this decision.
 // The SSA backend might prefer the new length or to return only ptr/cap and save stack space.
-func growslice(et *_type, old slice, cap int) slice {
+func growslice(et *_type, old slice, cap int) slice {  // 当append发现需要扩容时会调用这个方法。cap是指slice的大小加append的元素的个数后的值，表示大小至少要这么多
 	if raceenabled {
 		callerpc := getcallerpc()
 		racereadrangepc(old.array, uintptr(old.len*int(et.size)), callerpc, funcPC(growslice))
@@ -82,27 +82,27 @@ func growslice(et *_type, old slice, cap int) slice {
 		msanread(old.array, uintptr(old.len*int(et.size)))
 	}
 
-	if cap < old.cap {
+	if cap < old.cap {  // 虽然append有判断，但这里double check
 		panic(errorString("growslice: cap out of range"))
 	}
 
-	if et.size == 0 {
+	if et.size == 0 {  // 如果元素类型的大小是0，则返回一个slice，它的底层数组指针指向一个0内存分配的位置
 		// append should not create a slice with nil pointer but non-zero len.
 		// We assume that append doesn't need to preserve old.array in this case.
 		return slice{unsafe.Pointer(&zerobase), old.len, cap}
 	}
 
 	newcap := old.cap
-	doublecap := newcap + newcap
-	if cap > doublecap {
+	doublecap := newcap + newcap  // 原来的容量翻倍
+	if cap > doublecap {  // 如果需要的大于两倍的原来容量，则新容量选择需要的容量。意味着append后所有容量都将被占用，大小等于容量，如果这个slice频繁的append，则会一直扩容，降低性能
 		newcap = cap
-	} else {
-		if old.len < 1024 {
+	} else {  // 如果两倍的后足够存放数据了
+		if old.len < 1024 {  // 如果append前的元素个数小于1024，则新容量就设置为双倍
 			newcap = doublecap
-		} else {
+		} else {  // 如果原来的元素个数比1024还大，则不采用翻倍，而是0.25被增长，直到足够。这种做法不至于浪费内存，但是如果这个slice频繁的append，则会一直扩容，降低性能
 			// Check 0 < newcap to detect overflow
 			// and prevent an infinite loop.
-			for 0 < newcap && newcap < cap {
+			for 0 < newcap && newcap < cap {  // 从老容量开始0.25倍增长，直到新容量大于需要的容量
 				newcap += newcap / 4
 			}
 			// Set newcap to the requested cap when
@@ -112,7 +112,7 @@ func growslice(et *_type, old slice, cap int) slice {
 			}
 		}
 	}
-
+	// 新容量选定后，开始扩容
 	var overflow bool
 	var lenmem, newlenmem, capmem uintptr
 	// Specialize for common values of et.size.
@@ -120,18 +120,18 @@ func growslice(et *_type, old slice, cap int) slice {
 	// For sys.PtrSize, compiler will optimize division/multiplication into a shift by a constant.
 	// For powers of 2, use a variable shift.
 	switch {
-	case et.size == 1:
+	case et.size == 1:  // 如果元素类型占用大小为1
 		lenmem = uintptr(old.len)
 		newlenmem = uintptr(cap)
 		capmem = roundupsize(uintptr(newcap))
 		overflow = uintptr(newcap) > maxAlloc
 		newcap = int(capmem)
 	case et.size == sys.PtrSize:
-		lenmem = uintptr(old.len) * sys.PtrSize
-		newlenmem = uintptr(cap) * sys.PtrSize
-		capmem = roundupsize(uintptr(newcap) * sys.PtrSize)
+		lenmem = uintptr(old.len) * sys.PtrSize  // 得到append前所有数据占用的空间大小
+		newlenmem = uintptr(cap) * sys.PtrSize  // 得到append后所有数据占用的空间大小
+		capmem = roundupsize(uintptr(newcap) * sys.PtrSize)  // 得到新容量占用的空间大小。如果不是8kb的倍数，则向上取，16kb、24kb、32kb
 		overflow = uintptr(newcap) > maxAlloc/sys.PtrSize
-		newcap = int(capmem / sys.PtrSize)
+		newcap = int(capmem / sys.PtrSize)  // 修正新容量
 	case isPowerOfTwo(et.size):
 		var shift uintptr
 		if sys.PtrSize == 8 {
@@ -171,12 +171,12 @@ func growslice(et *_type, old slice, cap int) slice {
 	}
 
 	var p unsafe.Pointer
-	if et.ptrdata == 0 {
-		p = mallocgc(capmem, nil, false)
+	if et.ptrdata == 0 {  // 如果元素是值类型
+		p = mallocgc(capmem, nil, false)  // 申请新容量的空间出来
 		// The append() that calls growslice is going to overwrite from old.len to cap (which will be the new length).
 		// Only clear the part that will not be overwritten.
-		memclrNoHeapPointers(add(p, newlenmem), capmem-newlenmem)
-	} else {
+		memclrNoHeapPointers(add(p, newlenmem), capmem-newlenmem)  // 清除 `新空间开始指针+至少需要的容量（被数据占满）` 的位置后面的数据
+	} else {  // 如果元素是指针类型，就需要扫描标记，mallocgc的参数不一样
 		// Note: can't use rawmem (which avoids zeroing of memory), because then GC can scan uninitialized memory.
 		p = mallocgc(capmem, et, true)
 		if lenmem > 0 && writeBarrier.enabled {
@@ -185,7 +185,7 @@ func growslice(et *_type, old slice, cap int) slice {
 			bulkBarrierPreWriteSrcOnly(uintptr(p), uintptr(old.array), lenmem)
 		}
 	}
-	memmove(p, old.array, lenmem)
+	memmove(p, old.array, lenmem)  // 将原slice中的数据直接copy到新空间
 
 	return slice{p, old.len, newcap}
 }
@@ -194,7 +194,7 @@ func isPowerOfTwo(x uintptr) bool {
 	return x&(x-1) == 0
 }
 
-func slicecopy(to, fm slice, width uintptr) int {
+func slcecopy(to, fm slice, width uintptr) int {
 	if fm.len == 0 || to.len == 0 {
 		return 0
 	}
