@@ -349,7 +349,7 @@ func stackalloc(n uint32) stack {  // 分配一个栈空间。要么从栈缓存
 	// If we need a stack of a bigger size, we fall back on allocating
 	// a dedicated span.
 	var v unsafe.Pointer
-	if n < _FixedStack<<_NumStackOrders && n < _StackCacheSize {
+	if n < _FixedStack<<_NumStackOrders && n < _StackCacheSize {  // 栈缓存中取
 		order := uint8(0)
 		n2 := n
 		for n2 > _FixedStack {
@@ -366,7 +366,7 @@ func stackalloc(n uint32) stack {  // 分配一个栈空间。要么从栈缓存
 			lock(&stackpool[order].item.mu)
 			x = stackpoolalloc(order)
 			unlock(&stackpool[order].item.mu)
-		} else {
+		} else {  // 栈缓存没有了的话，就填充一批到栈缓存中
 			x = c.stackcache[order].list
 			if x.ptr() == nil {
 				stackcacherefill(c, order)
@@ -975,7 +975,7 @@ func newstack() {
 	// it needs a lock held by the goroutine), that small preemption turns
 	// into a real deadlock.
 	if preempt {
-		if !canPreemptM(thisg.m) {
+		if !canPreemptM(thisg.m) {  // 如果m不能被抢占，那么继续执行原来的g
 			// Let the goroutine keep running for now.
 			// gp->preempt is set, so it will be preempted next time.
 			gp.stackguard0 = gp.stack.lo + _StackGuard

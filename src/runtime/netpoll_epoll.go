@@ -116,7 +116,7 @@ func netpoll(delay int64) gList {  // 调度器或者ssymon都会在一定条件
 	}
 	var events [128]epollevent
 retry:
-	n := epollwait(epfd, &events[0], int32(len(events)), waitms)  // epollwait系统调用是异步非阻塞的
+	n := epollwait(epfd, &events[0], int32(len(events)), waitms)  // waitms为-1，则此处阻塞，为0则非阻塞，非-1也非0则阻塞waitms这么多ms。运行时中waitms基本都是传的0。这里无需考虑惊群问题，因为Go中线程本就不多而且这里是异步的。这里如果多个线程阻塞式执行到这里，则会有惊群问题，操作系统保证只有一个线程收到真正的事件，其他线程收到EAGAIN错误
 	if n < 0 {
 		if n != -_EINTR {
 			println("runtime: epollwait on fd", epfd, "failed with", -n)

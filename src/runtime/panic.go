@@ -588,15 +588,15 @@ func Goexit() {
 
 	// Create a panic object for Goexit, so we can recognize when it might be
 	// bypassed by a recover().
-	var p _panic
+	var p _panic // 新建一个panic，标记为goexit的panic，插入到panic链表
 	p.goexit = true
 	p.link = gp._panic
 	gp._panic = (*_panic)(noescape(unsafe.Pointer(&p)))
 
 	addOneOpenDeferFrame(gp, getcallerpc(), unsafe.Pointer(getcallersp()))
-	for {
+	for { // 循环执行所有defer(panic发生时也会循环执行所有defer)
 		d := gp._defer
-		if d == nil {
+		if d == nil { // 可能某个panic已经执行完了所有defer，这里就直接跳出了
 			break
 		}
 		if d.started {
@@ -633,7 +633,7 @@ func Goexit() {
 
 			// Save the pc/sp in reflectcallSave(), so we can "recover" back to this
 			// loop if necessary.
-			reflectcallSave(&p, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz))
+			reflectcallSave(&p, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz)) // 保存当前执行位置到g指向的panic链表头元素中
 		}
 		if p.aborted {
 			// We had a recursive panic in the defer d we started, and
@@ -917,10 +917,10 @@ func gopanic(e interface{}) {
 		throw("panic holding locks")
 	}
 
-	var p _panic  // 新建一个panic结构
-	p.arg = e  // 赋值panic的参数
-	p.link = gp._panic  // 跟defer一样，形成链表
-	gp._panic = (*_panic)(noescape(unsafe.Pointer(&p)))  // panic赋值给当前g的_panic变量
+	var p _panic                                        // 新建一个panic结构
+	p.arg = e                                           // 赋值panic的参数
+	p.link = gp._panic                                  // 跟defer一样，形成链表
+	gp._panic = (*_panic)(noescape(unsafe.Pointer(&p))) // panic赋值给当前g的_panic变量。就是将新的panic加入链表首部（g的_panic变量指向g中发生的所有没有被recover的panic的链表的首部）
 
 	atomic.Xadd(&runningPanicDefers, 1)
 
@@ -928,16 +928,16 @@ func gopanic(e interface{}) {
 	// gopanic frame (stack scanning is slow...)
 	addOneOpenDeferFrame(gp, getcallerpc(), unsafe.Pointer(getcallersp()))
 
-	for {
+	for { // 开始遍历执行所有defer
 		d := gp._defer
-		if d == nil {
+		if d == nil { // 一个defer都没有，直接退出循环
 			break
 		}
 
 		// If defer was started by earlier panic or Goexit (and, since we're back here, that triggered a new panic),
 		// take defer off list. An earlier panic will not continue running, but we will make sure below that an
 		// earlier Goexit does continue running.
-		if d.started {
+		if d.started { // 如果已经开始执行这个defer了
 			if d._panic != nil {
 				d._panic.aborted = true
 			}
@@ -957,12 +957,12 @@ func gopanic(e interface{}) {
 		// Mark defer as started, but keep on list, so that traceback
 		// can find and update the defer's argument frame if stack growth
 		// or a garbage collection happens before reflectcall starts executing d.fn.
-		d.started = true
+		d.started = true // 标记为已经开始执行了
 
 		// Record the panic that is running the defer.
 		// If there is a new panic during the deferred call, that panic
 		// will find d in the list and will mark d._panic (this panic) aborted.
-		d._panic = (*_panic)(noescape(unsafe.Pointer(&p)))  // 将panic存到defer结构中
+		d._panic = (*_panic)(noescape(unsafe.Pointer(&p))) // 将panic存到defer结构中以备下面openDefer临时用一下
 
 		done := true
 		if d.openDefer {
@@ -971,8 +971,8 @@ func gopanic(e interface{}) {
 				addOneOpenDeferFrame(gp, 0, nil)
 			}
 		} else {
-			p.argp = unsafe.Pointer(getargp(0))  // 取出defer函数的参数
-			reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))  // 执行defer函数
+			p.argp = unsafe.Pointer(getargp(0))                                                // 取出defer函数的参数
+			reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz)) // 执行defer函数
 		}
 		p.argp = nil
 
@@ -980,26 +980,26 @@ func gopanic(e interface{}) {
 		if gp._defer != d {
 			throw("bad defer entry in panic")
 		}
-		d._panic = nil
+		d._panic = nil // 又改为nil
 
 		// trigger shrinkage to test stack copy. See stack_test.go:TestStackPanic
 		//GC()
 
-		pc := d.pc  // 保存pc，以备后面恢复
+		pc := d.pc                 // 保存pc，以备后面恢复
 		sp := unsafe.Pointer(d.sp) // must be pointer so it gets adjusted during stack copy  保存sp，以备后面恢复
 		if done {
 			d.fn = nil
 			gp._defer = d.link
 			freedefer(d)
 		}
-		if p.recovered {  // 如果panic被defer中的recover捕获
-			gp._panic = p.link  // 当前g的panic移向下一个panic，所以同一个panic只能被recover一次
-			if gp._panic != nil && gp._panic.goexit && gp._panic.aborted {
+		if p.recovered { // 如果panic被此次defer中的recover捕获
+			gp._panic = p.link                                             // 当前panic被recover例如，所以从链表中移除当前panic
+			if gp._panic != nil && gp._panic.goexit && gp._panic.aborted { // 如果当前g还存在没被recover的panic && 这个panic是goexit函数中给的
 				// A normal recover would bypass/abort the Goexit.  Instead,
 				// we return to the processing loop of the Goexit.
 				gp.sigcode0 = uintptr(gp._panic.sp)
 				gp.sigcode1 = uintptr(gp._panic.pc)
-				mcall(recovery)
+				mcall(recovery)                   // 恢复到goexit函数执行
 				throw("bypassed recovery failed") // mcall should not return
 			}
 			atomic.Xadd(&runningPanicDefers, -1)
@@ -1050,7 +1050,7 @@ func gopanic(e interface{}) {
 			// Pass information about recovering frame to recovery.
 			gp.sigcode0 = uintptr(sp)
 			gp.sigcode1 = pc
-			mcall(recovery)  // 调用recovery函数，跳到defer对应的runtime.deferprocStack的后一行执行，发现返回值是1，就跳过panic后面代码的执行，而是跳到deferreturn完成所有defer的执行，接着退出函数
+			mcall(recovery)          // 调用recovery函数，跳到defer对应的runtime.deferprocStack的后一行执行，发现返回值是1，就跳过panic后面代码的执行，而是跳到deferreturn完成所有defer的执行，接着退出函数
 			throw("recovery failed") // mcall should not return
 		}
 	}
@@ -1059,7 +1059,7 @@ func gopanic(e interface{}) {
 	// Because it is unsafe to call arbitrary user code after freezing
 	// the world, we call preprintpanics to invoke all necessary Error
 	// and String methods to prepare the panic strings before startpanic.
-	preprintpanics(gp._panic)  // 所有defer运行完之后, 准备panic的打印信息
+	preprintpanics(gp._panic) // 所有defer运行完之后, 准备panic的打印信息
 
 	fatalpanic(gp._panic) // should not return  抛出panic并打印panic，然后异常退出进程。这就是为什么g panic没被捕获会导致整个进程异常退出，为什么父g不能recover子g
 	*(*int)(nil) = 0      // not reached

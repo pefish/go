@@ -30,7 +30,7 @@ func itabHashFunc(inter *interfacetype, typ *_type) uintptr {
 	return uintptr(inter.typ.hash ^ typ.hash)
 }
 
-func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {  // 查找itab，没找到就新建一个然后插入
+func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {  // 查找itab，没找到就新建一个然后插入。inter表示要查找的接口类型，typ表示要查找的持有值类型
 	if len(inter.mhdr) == 0 {
 		throw("internal error - misuse of itab")
 	}

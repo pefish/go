@@ -44,7 +44,7 @@ import (
 type Pool struct {
 	noCopy noCopy
 
-	local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
+	local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal  每个P一个poolLocal
 	localSize uintptr        // size of the local array
 
 	victim     unsafe.Pointer // local from previous cycle
@@ -58,7 +58,7 @@ type Pool struct {
 
 // Local per-P Pool appendix.
 type poolLocalInternal struct {
-	private interface{} // Can be used only by the respective P.
+	private interface{} // Can be used only by the respective P. 存放一个对象。put时先放这里，这里已经有的话才放到poolChain中；get时先从这里拿，这里没有才从poolChain拿
 	shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
 }
 
@@ -99,15 +99,15 @@ func (p *Pool) Put(x interface{}) {
 		race.ReleaseMerge(poolRaceAddr(x))
 		race.Disable()
 	}
-	l, _ := p.pin()
-	if l.private == nil {
+	l, _ := p.pin()  // 阻止m被抢占，并拿出当前P对应的池子 (这里如果不阻止抢占的话，如果当前g换了一个P，就可能会出现同一个g操作多个P对应的池子，前一半代码操作A池子后一半代码操作B池子，导致问题)
+	if l.private == nil {  // private没被塞对象的话就往里塞一个，已经塞了的话就塞到poolChain里去
 		l.private = x
 		x = nil
 	}
 	if x != nil {
-		l.shared.pushHead(x)
+		l.shared.pushHead(x)  // 放到当前P对应的poolChain链表里去
 	}
-	runtime_procUnpin()
+	runtime_procUnpin()  // 解除抢占
 	if race.Enabled {
 		race.Enable()
 	}
@@ -125,15 +125,15 @@ func (p *Pool) Get() interface{} {
 	if race.Enabled {
 		race.Disable()
 	}
-	l, pid := p.pin()
-	x := l.private
+	l, pid := p.pin()  // 阻止抢占，并取出当前P对应的本地池
+	x := l.private  // 从private字段取出对象
 	l.private = nil
-	if x == nil {
+	if x == nil {  // 如果private字段中没有取到，就去poolChain链表里去取
 		// Try to pop the head of the local shard. We prefer
 		// the head over the tail for temporal locality of
 		// reuse.
 		x, _ = l.shared.popHead()
-		if x == nil {
+		if x == nil {  // 如果当前P的池子中没有找到，则从其他P对应的池子偷
 			x = p.getSlow(pid)
 		}
 	}
@@ -144,7 +144,7 @@ func (p *Pool) Get() interface{} {
 			race.Acquire(poolRaceAddr(x))
 		}
 	}
-	if x == nil && p.New != nil {
+	if x == nil && p.New != nil {  // 如果当前P对应的池子中没有取到对象，则New一个
 		x = p.New()
 	}
 	return x
@@ -192,8 +192,8 @@ func (p *Pool) getSlow(pid int) interface{} {
 // pin pins the current goroutine to P, disables preemption and
 // returns poolLocal pool for the P and the P's id.
 // Caller must call runtime_procUnpin() when done with the pool.
-func (p *Pool) pin() (*poolLocal, int) {
-	pid := runtime_procPin()
+func (p *Pool) pin() (*poolLocal, int) {  // 将当前g绑死在当前P上，找到当前P对应的poolLocal
+	pid := runtime_procPin()   // 阻止当前m被抢占，就是将当前g绑死在当前m上，返回的是逻辑处理器的id
 	// In pinSlow we store to local and then to localSize, here we load in opposite order.
 	// Since we've disabled preemption, GC cannot happen in between.
 	// Thus here we must observe local at least as large localSize.

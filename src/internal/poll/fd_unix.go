@@ -365,7 +365,7 @@ func (fd *FD) WriteMsg(p []byte, oob []byte, sa syscall.Sockaddr) (int, int, err
 
 // Accept wraps the accept network call.
 func (fd *FD) Accept() (int, syscall.Sockaddr, string, error) {
-	if err := fd.readLock(); err != nil {
+	if err := fd.readLock(); err != nil {  // 读锁，多个线程可以重入
 		return -1, nil, "", err
 	}
 	defer fd.readUnlock()
@@ -374,7 +374,7 @@ func (fd *FD) Accept() (int, syscall.Sockaddr, string, error) {
 		return -1, nil, "", err
 	}
 	for {
-		s, rsa, errcall, err := accept(fd.Sysfd)
+		s, rsa, errcall, err := accept(fd.Sysfd)  // 非阻塞方式accept。早期linux版本中，多个线程同时阻塞方式accept，当有连接进来，操作系统会通知到所有线程并将他们唤醒，造成惊群问题，而现在的linux版本修复了这个问题，操作系统保证只会通知到唯一一个线程
 		if err == nil {
 			return s, rsa, "", err
 		}

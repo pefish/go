@@ -491,7 +491,7 @@ type m struct {
 	mallocing     int32
 	throwing      int32
 	preemptoff    string // if != "", keep curg running on this m
-	locks         int32  // 表示多少个线程处于等待锁的状态
+	locks         int32  // 表示多少个g处于等待锁的状态
 	dying         int32
 	profilehz     int32
 	spinning      bool // m is out of work and is actively looking for work

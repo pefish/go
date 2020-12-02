@@ -226,7 +226,7 @@ func Atoi(s string) (int, error) {
 
 	sLen := len(s)
 	if intSize == 32 && (0 < sLen && sLen < 10) ||
-		intSize == 64 && (0 < sLen && sLen < 19) {
+		intSize == 64 && (0 < sLen && sLen < 19) {  // 32位机器上int类型最大值是2147483647，10个长度字符串；64位机器上int类型最大值是9223372036854775807，19个长度字符串
 		// Fast path for small integers that fit int type.
 		s0 := s
 		if s[0] == '-' || s[0] == '+' {
@@ -235,14 +235,14 @@ func Atoi(s string) (int, error) {
 				return 0, &NumError{fnAtoi, s0, ErrSyntax}
 			}
 		}
-
+		// 循环每个字符，n = 10 * n + k 即可得出最终的n
 		n := 0
 		for _, ch := range []byte(s) {
-			ch -= '0'
-			if ch > 9 {
+			ch -= '0'  // 减去 "0" 字符对应的数字，得到的就是这个字母转换后的数字
+			if ch > 9 {  // 检查非法输入
 				return 0, &NumError{fnAtoi, s0, ErrSyntax}
 			}
-			n = n*10 + int(ch)
+			n = n*10 + int(ch)  // 累加
 		}
 		if s0[0] == '-' {
 			n = -n
@@ -250,7 +250,7 @@ func Atoi(s string) (int, error) {
 		return n, nil
 	}
 
-	// Slow path for invalid, big, or underscored integers.
+	// Slow path for invalid, big, or underscored integers.  如果int类型不能表示这个字符串，则ParseInt
 	i64, err := ParseInt(s, 10, 0)
 	if nerr, ok := err.(*NumError); ok {
 		nerr.Func = fnAtoi
