@@ -229,7 +229,7 @@ func Atoi(s string) (int, error) {
 		intSize == 64 && (0 < sLen && sLen < 19) {  // 32位机器上int类型最大值是2147483647，10个长度字符串；64位机器上int类型最大值是9223372036854775807，19个长度字符串
 		// Fast path for small integers that fit int type.
 		s0 := s
-		if s[0] == '-' || s[0] == '+' {
+		if s[0] == '-' || s[0] == '+' {  // 剔除掉前面的正负号
 			s = s[1:]
 			if len(s) < 1 {
 				return 0, &NumError{fnAtoi, s0, ErrSyntax}
